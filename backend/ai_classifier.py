@@ -23,10 +23,31 @@ logger = logging.getLogger(__name__)
 THE_BRAIN_PATH = Path(__file__).parent / "THE_BRAIN_v1.md"
 
 ALLOWED_CATEGORIES = {
+    "00 Inbox", "01 ATO", "02 PAYG Income", "03 Airbnb", "04 Waggrakine Rental",
+    "05 Heathridge", "06 Revive", "07 Bank Statements",
+    "08 Salary Packaging Maxxia", "09 Accountant Review",
+    "10 Missing Evidence", "11 Final Accountant Pack",
+    # Legacy short forms still accepted; normalised below.
     "ATO", "PAYG Income", "Airbnb", "Waggrakine Rental", "Heathridge",
     "Revive", "Bank Statement", "Salary Packaging / Maxxia", "Super / HECS",
     "Accountant Review", "Other",
 }
+
+CATEGORY_NORMALISE = {
+    "ATO": "01 ATO",
+    "PAYG Income": "02 PAYG Income",
+    "Airbnb": "03 Airbnb",
+    "Waggrakine Rental": "04 Waggrakine Rental",
+    "Heathridge": "05 Heathridge",
+    "Revive": "06 Revive",
+    "Bank Statement": "07 Bank Statements",
+    "Salary Packaging / Maxxia": "08 Salary Packaging Maxxia",
+    "Super / HECS": "02 PAYG Income",
+    "Accountant Review": "09 Accountant Review",
+    "Other": "00 Inbox",
+}
+
+ALLOWED_RISK = {"Green", "Amber", "Red"}
 
 ALLOWED_TAX_YEARS = {"FY2024", "FY2025", "FY2026", "FY2027", "Both", "Historical", "Unsure"}
 
@@ -99,9 +120,11 @@ def validate_and_repair(parsed: dict, source_text: str) -> dict:
     out: dict[str, Any] = {}
     out["document_type"] = str(parsed.get("document_type") or "Unknown")
 
-    cat = str(parsed.get("category") or "Other")
-    if cat not in ALLOWED_CATEGORIES:
-        cat = "Other"
+    cat = str(parsed.get("category") or "00 Inbox")
+    cat = CATEGORY_NORMALISE.get(cat, cat)
+    if cat not in ALLOWED_CATEGORIES or cat in CATEGORY_NORMALISE:
+        # If still a short legacy value or unknown, fall back to Inbox
+        cat = CATEGORY_NORMALISE.get(cat, "00 Inbox") if cat in CATEGORY_NORMALISE else "00 Inbox"
     out["category"] = cat
 
     cc = str(parsed.get("category_confidence") or "Unsure")
@@ -120,10 +143,23 @@ def validate_and_repair(parsed: dict, source_text: str) -> dict:
     out["tax_year_confidence"] = tyc
 
     out["tax_year_reason"] = str(parsed.get("tax_year_reason") or "")[:500]
-    out["date_range_from"] = parsed.get("date_range_from") if isinstance(parsed.get("date_range_from"), str) else None
-    out["date_range_to"] = parsed.get("date_range_to") if isinstance(parsed.get("date_range_to"), str) else None
+
+    risk = str(parsed.get("risk_level") or "")
+    if risk not in ALLOWED_RISK:
+        risk = "Amber" if out.get("category") == "00 Inbox" else "Green"
+    out["risk_level"] = risk
+
+    # date_range may arrive nested {from,to} or flat (legacy)
+    dr = parsed.get("date_range")
+    if isinstance(dr, dict):
+        out["date_range_from"] = dr.get("from") if isinstance(dr.get("from"), str) else None
+        out["date_range_to"] = dr.get("to") if isinstance(dr.get("to"), str) else None
+    else:
+        out["date_range_from"] = parsed.get("date_range_from") if isinstance(parsed.get("date_range_from"), str) else None
+        out["date_range_to"] = parsed.get("date_range_to") if isinstance(parsed.get("date_range_to"), str) else None
+
     out["counterparty"] = (parsed.get("counterparty") or None)
-    out["one_line_summary"] = str(parsed.get("one_line_summary") or "")[:200]
+    out["one_line_summary"] = str(parsed.get("one_line_summary") or "")[:240]
     out["what_it_proves"] = str(parsed.get("what_it_proves") or "")[:600]
 
     figs_in = parsed.get("headline_figures") or []

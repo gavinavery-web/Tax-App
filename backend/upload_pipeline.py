@@ -61,8 +61,22 @@ def sha256_bytes(b: bytes) -> str:
     return h.hexdigest()
 
 
-# Map AI category -> drive folder name.
+# Map AI category → drive folder. The Brain now returns the literal folder
+# name (e.g. "02 PAYG Income"); we keep legacy short names as aliases.
 CATEGORY_TO_FOLDER = {
+    "00 Inbox": "00 Inbox",
+    "01 ATO": "01 ATO",
+    "02 PAYG Income": "02 PAYG Income",
+    "03 Airbnb": "03 Airbnb",
+    "04 Waggrakine Rental": "04 Waggrakine Rental",
+    "05 Heathridge": "05 Heathridge",
+    "06 Revive": "06 Revive",
+    "07 Bank Statements": "07 Bank Statements",
+    "08 Salary Packaging Maxxia": "08 Salary Packaging Maxxia",
+    "09 Accountant Review": "09 Accountant Review",
+    "10 Missing Evidence": "10 Missing Evidence",
+    "11 Final Accountant Pack": "11 Final Accountant Pack",
+    # Legacy short forms
     "ATO": "01 ATO",
     "PAYG Income": "02 PAYG Income",
     "Airbnb": "03 Airbnb",
@@ -73,7 +87,7 @@ CATEGORY_TO_FOLDER = {
     "Salary Packaging / Maxxia": "08 Salary Packaging Maxxia",
     "Super / HECS": "02 PAYG Income",
     "Accountant Review": "09 Accountant Review",
-    "Other": "10 Missing Evidence",
+    "Other": "00 Inbox",
 }
 INBOX_FOLDER = "00 Inbox"
 
@@ -405,6 +419,7 @@ async def _process_one(item: dict):
         "one_line_summary": analysis.get("one_line_summary") or "",
         "accountant_review_required": bool(analysis.get("accountant_review_required")),
         "accountant_review_reason": analysis.get("accountant_review_reason"),
+        "risk_level": analysis.get("risk_level") or "Amber",
         "suggested_filename": analysis.get("suggested_filename"),
         "ai_model_used": ai_meta.get("model"),
         "ai_input_tokens": ai_meta.get("tokens_in", 0),
