@@ -123,7 +123,15 @@ export default function EvidenceRegister() {
                 <td onClick={(e) => e.stopPropagation()}>
                   {d.drive_link ? (
                     <a href={d.drive_link} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline flex items-center gap-1 text-xs" data-testid={`drive-link-${d.id}`}>
-                      open <ExternalLink className="w-3 h-3" />
+                      drive <ExternalLink className="w-3 h-3" />
+                    </a>
+                  ) : d.manual_drive_link ? (
+                    <a href={d.manual_drive_link} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline flex items-center gap-1 text-xs" data-testid={`manual-link-${d.id}`}>
+                      manual <ExternalLink className="w-3 h-3" />
+                    </a>
+                  ) : d.storage === "local" ? (
+                    <a href={`${process.env.REACT_APP_BACKEND_URL}/api/documents/${d.id}/download`} className="text-blue-700 hover:underline text-xs" data-testid={`local-link-${d.id}`}>
+                      local
                     </a>
                   ) : <span className="text-zinc-400 text-xs">—</span>}
                 </td>

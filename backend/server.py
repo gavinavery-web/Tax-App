@@ -44,7 +44,11 @@ logger = logging.getLogger(__name__)
 # =================== Constants ===================
 SINGLETON_KEY = "default"  # Single-user app
 
-DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive']
+DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file']
+
+# Local fallback storage when Drive is not connected
+LOCAL_UPLOADS_DIR = ROOT_DIR / "uploads"
+LOCAL_UPLOADS_DIR.mkdir(exist_ok=True)
 
 FOLDER_STRUCTURE = [
     ("01 ATO", "ATO"),
@@ -171,6 +175,10 @@ class Document(BaseModel):
     drive_link: Optional[str] = None
     drive_folder_id: Optional[str] = None
     drive_folder_name: Optional[str] = None
+    storage: str = "drive"  # "drive" or "local"
+    local_path: Optional[str] = None
+    manual_drive_folder: Optional[str] = ""
+    manual_drive_link: Optional[str] = ""
     size_bytes: int = 0
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
@@ -186,6 +194,8 @@ class DocumentUpdate(BaseModel):
     key_figures_found: Optional[str] = None
     what_it_proves: Optional[str] = None
     missing_followup: Optional[str] = None
+    manual_drive_folder: Optional[str] = None
+    manual_drive_link: Optional[str] = None
 
 
 class Figure(BaseModel):
@@ -369,11 +379,68 @@ async def drive_connect():
         include_granted_scopes='true',
         prompt='consent',
     )
+    # Record the attempt so the diagnostics panel can warn if Google never
+    # redirects back (which happens when Google blocks the request at its own
+    # consent page — the user sees a 403 page and the browser stays on
+    # accounts.google.com).
+    await db.drive_attempts.update_one(
+        {"key": SINGLETON_KEY},
+        {"$set": {
+            "key": SINGLETON_KEY,
+            "started_at": utc_now_iso(),
+            "authorization_url": authorization_url,
+            "redirect_uri": redirect_uri,
+            "scopes_requested": DRIVE_SCOPES,
+            "client_id": os.environ["GOOGLE_CLIENT_ID"],
+            "callback_received": False,
+        }},
+        upsert=True,
+    )
+    logger.info(f"Drive OAuth attempt started, redirect_uri={redirect_uri}")
     return {"authorization_url": authorization_url}
 
 
 @api_router.get("/drive/callback")
-async def drive_callback(code: str = Query(...)):
+async def drive_callback(
+    code: str = Query(None),
+    error: str = Query(None),
+    error_description: str = Query(None),
+):
+    frontend = os.environ["FRONTEND_URL"]
+    # Google sometimes redirects back with ?error=access_denied&error_description=...
+    if error:
+        await db.drive_errors.update_one(
+            {"key": SINGLETON_KEY},
+            {"$set": {
+                "key": SINGLETON_KEY,
+                "error": error,
+                "error_description": error_description or "",
+                "source": "google_redirect",
+                "timestamp": utc_now_iso(),
+            }},
+            upsert=True,
+        )
+        await db.drive_attempts.update_one(
+            {"key": SINGLETON_KEY},
+            {"$set": {"callback_received": True, "callback_result": "error", "callback_at": utc_now_iso()}},
+        )
+        logger.error(f"Drive OAuth error from Google: {error} — {error_description}")
+        return RedirectResponse(
+            url=f"{frontend}/settings?drive=error&code={error}&msg={(error_description or '')[:300]}"
+        )
+    if not code:
+        await db.drive_errors.update_one(
+            {"key": SINGLETON_KEY},
+            {"$set": {
+                "key": SINGLETON_KEY,
+                "error": "missing_code",
+                "error_description": "Google redirected back without an authorization code.",
+                "source": "callback",
+                "timestamp": utc_now_iso(),
+            }},
+            upsert=True,
+        )
+        return RedirectResponse(url=f"{frontend}/settings?drive=error&code=missing_code")
     try:
         redirect_uri = os.environ["GOOGLE_DRIVE_REDIRECT_URI"]
         flow = Flow.from_client_config(
@@ -391,25 +458,57 @@ async def drive_callback(code: str = Query(...)):
         )
         flow.fetch_token(code=code)
         credentials = flow.credentials
-        required = {"https://www.googleapis.com/auth/drive"}
+        required = set(DRIVE_SCOPES)
         granted = set(credentials.scopes or [])
         if not required.issubset(granted):
             missing = required - granted
-            raise HTTPException(status_code=400, detail=f"Missing Drive scopes: {missing}")
+            err_msg = f"Missing Drive scopes: {', '.join(missing)}"
+            await db.drive_errors.update_one(
+                {"key": SINGLETON_KEY},
+                {"$set": {
+                    "key": SINGLETON_KEY,
+                    "error": "missing_scopes",
+                    "error_description": err_msg,
+                    "source": "callback",
+                    "timestamp": utc_now_iso(),
+                }},
+                upsert=True,
+            )
+            return RedirectResponse(url=f"{frontend}/settings?drive=error&code=missing_scopes&msg={err_msg}")
         await save_drive_credentials(credentials)
-        # Auto-initialize folder structure so user doesn't need a second click
+        # Clear any prior error since we are now connected
+        await db.drive_errors.delete_many({"key": SINGLETON_KEY})
+        await db.drive_attempts.update_one(
+            {"key": SINGLETON_KEY},
+            {"$set": {"callback_received": True, "callback_result": "success", "callback_at": utc_now_iso()}},
+        )
         try:
             await get_or_create_folders()
         except Exception as e:
             logger.warning(f"Auto-folder-init after OAuth failed (will retry on demand): {e}")
-        frontend = os.environ["FRONTEND_URL"]
         return RedirectResponse(url=f"{frontend}/settings?drive=connected")
-    except HTTPException:
-        raise
     except Exception as e:
+        # Try to extract Google's structured error body
+        err_msg = str(e)
+        err_body = getattr(e, "response", None)
+        try:
+            if err_body is not None:
+                err_msg = f"{e} :: body={err_body.text[:500]}"
+        except Exception:
+            pass
+        await db.drive_errors.update_one(
+            {"key": SINGLETON_KEY},
+            {"$set": {
+                "key": SINGLETON_KEY,
+                "error": "fetch_token_failed",
+                "error_description": err_msg[:1000],
+                "source": "callback",
+                "timestamp": utc_now_iso(),
+            }},
+            upsert=True,
+        )
         logger.exception("Drive callback failed")
-        frontend = os.environ["FRONTEND_URL"]
-        return RedirectResponse(url=f"{frontend}/settings?drive=error&msg={str(e)[:200]}")
+        return RedirectResponse(url=f"{frontend}/settings?drive=error&code=fetch_token_failed&msg={err_msg[:300]}")
 
 
 @api_router.post("/drive/initialize")
@@ -422,6 +521,50 @@ async def drive_initialize():
 async def drive_disconnect():
     await db.drive_credentials.delete_many({"key": SINGLETON_KEY})
     await db.drive_config.delete_many({"key": SINGLETON_KEY})
+    await db.drive_errors.delete_many({"key": SINGLETON_KEY})
+    return {"ok": True}
+
+
+@api_router.get("/diagnostics")
+async def diagnostics():
+    creds = await get_drive_credentials_doc()
+    cfg = await db.drive_config.find_one({"key": SINGLETON_KEY}, {"_id": 0})
+    last_err = await db.drive_errors.find_one({"key": SINGLETON_KEY}, {"_id": 0})
+    last_attempt = await db.drive_attempts.find_one({"key": SINGLETON_KEY}, {"_id": 0})
+    # If we started an attempt but Google never bounced back, surface a
+    # synthesised "silent failure" so the panel isn't useless.
+    silent_block = None
+    if last_attempt and not last_attempt.get("callback_received") and not creds:
+        silent_block = {
+            "error": "google_blocked_before_callback",
+            "error_description": (
+                "Backend generated an OAuth URL but Google never redirected back to /api/drive/callback. "
+                "This means Google's consent page itself rejected the request (the 403 page you saw) and the "
+                "user/browser remained on accounts.google.com. No backend exception exists because nothing was "
+                "delivered to us. See the troubleshooting list on this page — the cause is in your Google Cloud "
+                "Console (consent screen scopes, app status, or client configuration), not in this app."
+            ),
+            "source": "diagnostics",
+            "timestamp": last_attempt.get("started_at"),
+        }
+    return {
+        "oauth_client_id": os.environ.get("GOOGLE_CLIENT_ID"),
+        "redirect_uri": os.environ.get("GOOGLE_DRIVE_REDIRECT_URI"),
+        "frontend_url": os.environ.get("FRONTEND_URL"),
+        "requested_scopes": DRIVE_SCOPES,
+        "drive_connected": bool(creds),
+        "drive_initialized": bool(cfg and cfg.get("parent_folder_id")),
+        "granted_scopes": (creds or {}).get("scopes") if creds else None,
+        "credentials_updated_at": (creds or {}).get("updated_at") if creds else None,
+        "last_error": last_err or silent_block,
+        "last_attempt": last_attempt,
+    }
+
+
+@api_router.delete("/diagnostics/last-error")
+async def clear_last_error():
+    await db.drive_errors.delete_many({"key": SINGLETON_KEY})
+    await db.drive_attempts.delete_many({"key": SINGLETON_KEY})
     return {"ok": True}
 
 
@@ -477,6 +620,8 @@ async def upload_document(
     category: str = Form(...),
     notes: str = Form(""),
     accountant_review: str = Form("No"),
+    manual_drive_folder: str = Form(""),
+    manual_drive_link: str = Form(""),
 ):
     if category not in CATEGORIES:
         raise HTTPException(status_code=400, detail=f"Invalid category: {category}")
@@ -490,50 +635,112 @@ async def upload_document(
     drive_file_id = None
     drive_link = None
     drive_folder_id = None
+    storage = "local"
+    local_path: Optional[str] = None
 
-    # Drive is the only storage backend (per user choice). Require connection.
     creds = await get_drive_credentials_doc()
-    if not creds:
-        raise HTTPException(
-            status_code=400,
-            detail="Google Drive not connected. Open Settings → Connect Google Drive before uploading.",
-        )
-    try:
-        cfg = await get_or_create_folders()
-        drive_folder_id = cfg["subfolders"].get(folder_name)
-        service = await get_drive_service()
-        media = MediaIoBaseUpload(io.BytesIO(content), mimetype=file_type, resumable=False)
-        meta = {'name': file.filename, 'parents': [drive_folder_id]}
-        res = service.files().create(
-            body=meta,
-            media_body=media,
-            fields='id, webViewLink, webContentLink',
-        ).execute()
-        drive_file_id = res.get('id')
-        drive_link = res.get('webViewLink')
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Drive upload failed")
-        raise HTTPException(status_code=500, detail=f"Drive upload failed: {e}")
+    if creds:
+        # Try Drive upload. On failure, fall back to local storage with a flag.
+        try:
+            cfg = await get_or_create_folders()
+            drive_folder_id = cfg["subfolders"].get(folder_name)
+            service = await get_drive_service()
+            media = MediaIoBaseUpload(io.BytesIO(content), mimetype=file_type, resumable=False)
+            meta = {'name': file.filename, 'parents': [drive_folder_id]}
+            res = service.files().create(
+                body=meta,
+                media_body=media,
+                fields='id, webViewLink, webContentLink',
+            ).execute()
+            drive_file_id = res.get('id')
+            drive_link = res.get('webViewLink')
+            storage = "drive"
+        except Exception as e:
+            logger.exception("Drive upload failed — falling back to local storage")
+            await db.drive_errors.update_one(
+                {"key": SINGLETON_KEY},
+                {"$set": {
+                    "key": SINGLETON_KEY,
+                    "error": "drive_upload_failed",
+                    "error_description": str(e)[:1000],
+                    "source": "upload",
+                    "timestamp": utc_now_iso(),
+                }},
+                upsert=True,
+            )
+            storage = "local"
 
-    doc = Document(
-        name=name,
-        file_type=file_type,
-        original_filename=file.filename,
-        tax_year=tax_year,
-        category=category,
-        notes=notes,
-        accountant_review=accountant_review,
-        status="Accountant review" if accountant_review == "Yes" else "Uploaded only",
-        drive_file_id=drive_file_id,
-        drive_link=drive_link,
-        drive_folder_id=drive_folder_id,
-        drive_folder_name=folder_name,
-        size_bytes=len(content),
-    )
+    if storage == "local":
+        doc_id = str(uuid.uuid4())
+        safe_name = file.filename.replace("/", "_")
+        local_file = LOCAL_UPLOADS_DIR / f"{doc_id}__{safe_name}"
+        with open(local_file, "wb") as fh:
+            fh.write(content)
+        local_path = str(local_file)
+        doc = Document(
+            id=doc_id,
+            name=name,
+            file_type=file_type,
+            original_filename=file.filename,
+            tax_year=tax_year,
+            category=category,
+            notes=notes,
+            accountant_review=accountant_review,
+            status="Accountant review" if accountant_review == "Yes" else "Uploaded only",
+            drive_folder_name=folder_name,
+            storage="local",
+            local_path=local_path,
+            manual_drive_folder=manual_drive_folder,
+            manual_drive_link=manual_drive_link,
+            size_bytes=len(content),
+        )
+    else:
+        doc = Document(
+            name=name,
+            file_type=file_type,
+            original_filename=file.filename,
+            tax_year=tax_year,
+            category=category,
+            notes=notes,
+            accountant_review=accountant_review,
+            status="Accountant review" if accountant_review == "Yes" else "Uploaded only",
+            drive_file_id=drive_file_id,
+            drive_link=drive_link,
+            drive_folder_id=drive_folder_id,
+            drive_folder_name=folder_name,
+            storage="drive",
+            manual_drive_folder=manual_drive_folder,
+            manual_drive_link=manual_drive_link,
+            size_bytes=len(content),
+        )
     await db.documents.insert_one(doc.model_dump())
     return doc
+
+
+@api_router.get("/documents/{doc_id}/download")
+async def download_document(doc_id: str):
+    doc = await db.documents.find_one({"id": doc_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    if doc.get("storage") != "local" or not doc.get("local_path"):
+        raise HTTPException(400, "Document is stored in Google Drive — use the Drive link instead.")
+    path = doc["local_path"]
+    if not os.path.exists(path):
+        raise HTTPException(404, "Local file missing on disk.")
+
+    def _iter():
+        with open(path, "rb") as fh:
+            while True:
+                chunk = fh.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+
+    return StreamingResponse(
+        _iter(),
+        media_type=doc.get("file_type") or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{doc.get("original_filename", "file")}"'},
+    )
 
 
 @api_router.get("/documents")
@@ -589,6 +796,13 @@ async def delete_document(doc_id: str):
             service.files().delete(fileId=doc["drive_file_id"]).execute()
         except Exception as e:
             logger.warning(f"Drive delete failed (continuing): {e}")
+    # Remove local file if present
+    if doc.get("local_path"):
+        try:
+            if os.path.exists(doc["local_path"]):
+                os.remove(doc["local_path"])
+        except Exception as e:
+            logger.warning(f"Local file delete failed: {e}")
     await db.documents.delete_one({"id": doc_id})
     await db.figures.delete_many({"document_id": doc_id})
     return {"ok": True}
