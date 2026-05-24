@@ -1,0 +1,80 @@
+{
+  "theme": "LIGHT",
+  "archetype": "4 (Swiss & High-Contrast)",
+  "vibe": "Spreadsheet-like, pragmatic, highly functional, information-dense, accountant-facing",
+  "typography": {
+    "heading_font": "Chivo",
+    "body_font": "IBM Plex Sans",
+    "mono_font": "IBM Plex Mono",
+    "hierarchy": {
+      "h1": "text-2xl sm:text-3xl font-bold tracking-tight",
+      "h2": "text-xl sm:text-2xl font-semibold tracking-tight",
+      "h3": "text-lg sm:text-xl font-medium",
+      "body": "text-sm text-zinc-900",
+      "data": "text-sm font-mono tracking-tight text-zinc-800"
+    },
+    "rules": [
+      "Use IBM Plex Mono (or similar monospaced font) for all financial figures, dates, and alphanumeric ID codes to ensure vertical alignment.",
+      "Never center-align tabular data. Text aligns left, Numbers align right.",
+      "Headings should remain compact; do not exceed text-3xl. Focus is on utility over display."
+    ]
+  },
+  "colors": {
+    "background_app": "#F4F4F5",
+    "background_surface": "#FFFFFF",
+    "border": "#E4E4E7",
+    "text_primary": "#09090B",
+    "text_secondary": "#52525B",
+    "accents": {
+      "primary": "#09090B",
+      "primary_hover": "#27272A",
+      "critical": "#DC2626",
+      "critical_bg": "#FEF2F2",
+      "warning": "#D97706",
+      "warning_bg": "#FFFBEB",
+      "success": "#16A34A",
+      "success_bg": "#F0FDF4",
+      "info": "#2563EB"
+    }
+  },
+  "spacing_and_layout": {
+    "strategy": "MODE B: THE CONTROL ROOM GRID",
+    "rules": [
+      "Maximize screen real estate. Use tight padding (p-2, p-3) for table cells and dense lists.",
+      "Containers must use sharp edges (rounded-none or rounded-sm max) and 1px solid borders.",
+      "Zero drop shadows. UI hierarchy is established through border weight (1px vs 2px) and background fill (white vs light gray).",
+      "Dashboard summary cards should sit tightly together with gap-4 or gap-0 (border-collapse style)."
+    ]
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-zinc-950 text-white rounded-sm px-4 py-2 text-sm font-medium hover:bg-zinc-800",
+      "secondary": "bg-white text-zinc-900 border border-zinc-300 rounded-sm px-4 py-2 text-sm font-medium hover:bg-zinc-100",
+      "ghost": "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 rounded-sm px-3 py-1.5"
+    },
+    "tables": {
+      "style": "Spreadsheet style. 1px solid grid lines (border-border). No zebra striping by default.",
+      "header": "Sticky header, bg-zinc-50, text-xs uppercase tracking-wider font-semibold text-zinc-500 border-b-2 border-zinc-200.",
+      "interaction": "Hover-only row actions to reduce visual clutter. Hover state on row: bg-zinc-50."
+    },
+    "cards": {
+      "style": "bg-white border border-zinc-200 rounded-sm p-4.",
+      "status_indicator": "For status-driven cards (e.g., Missing Documents), use a 3px left-border of the semantic color (red for critical)."
+    },
+    "forms": {
+      "style": "Dense, inline or 2-column layouts for figures. Shadcn inputs with rounded-sm, border-zinc-300.",
+      "focus": "focus-visible:ring-1 focus-visible:ring-zinc-950 focus-visible:ring-offset-0"
+    }
+  },
+  "testing": {
+    "requirements": "All interactive and key informational elements MUST include a data-testid attribute using kebab-case and role-based naming (e.g., data-testid='upload-evidence-button', data-testid='evidence-register-table')."
+  },
+  "instructions_to_main_agent": [
+    "This is an accountant-facing productivity tool. It must feel highly trustworthy, extremely fast, and completely devoid of unnecessary decorative flair.",
+    "Prioritize the Evidence Register: It must be a dense, robust data table. Implement sticky headers and ensure columns don't stretch unnecessarily.",
+    "Override default Shadcn component radii to `rounded-sm` or `rounded-none`. Remove default box-shadows.",
+    "Manual Figure Entry form should support fast keyboard navigation (Tab key workflow).",
+    "Missing Evidence Tracker should use color sparingly—only to highlight priority levels (Critical = Red, Important = Amber).",
+    "Ensure the Google Drive OAuth flow is treated as a utilitarian connection step (clear status text, simple button), not a massive marketing module."
+  ]
+}
