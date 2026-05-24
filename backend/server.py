@@ -461,7 +461,7 @@ async def drive_callback(
                     "redirect_uris": [redirect_uri],
                 }
             },
-            scopes=None,
+            scopes=DRIVE_SCOPES,
             redirect_uri=redirect_uri,
         )
         # Replay the PKCE code_verifier we generated in /api/drive/connect.
