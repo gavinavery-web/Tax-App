@@ -1,0 +1,39 @@
+{
+  "summary": "Backend testing for Tax Evidence Vault Stage 1. Created 22 pytest cases covering all listed endpoints — root, reference, drive status/connect, preload counts/totals, missing-evidence CRUD, figures CRUD, dashboard, documents upload/list/filter/patch/delete, CSV + PDF reports, and seed idempotency. All 22/22 passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/documents", "issue": "When Google Drive is NOT connected, upload silently succeeds and stores the document record without drive_file_id (and no local file is persisted — the bytes are read into memory then discarded). Per the request this is acceptable Stage 1 behaviour, but bears explicit confirmation/UX flag. Consider returning 400 'Google Drive not connected' OR persisting bytes to a fallback local store so the file is not lost."},
+      {"endpoint": "POST /api/documents", "issue": "category=='Super / HECS' is listed in CATEGORY_TO_FOLDER but not in problem-statement category list shown to user; it maps to '02 PAYG Income' folder which may surprise users — review intentionality."},
+      {"endpoint": "GET /api/figures", "issue": "tax_year filter performs exact match (no Both expansion like documents endpoint). Inconsistent with /api/documents behaviour; acceptable but worth noting."},
+      {"endpoint": "GET /api/drive/callback", "issue": "Cannot be exercised without a real Google consent; left untested as instructed."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_tax_vault.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Confirm intended UX for POST /api/documents when Drive is not connected — currently creates DB record but drops file bytes (no local copy). Either reject with 400 or persist locally.",
+    "Decide whether 'Super / HECS' category should map to its own folder (currently shares 02 PAYG Income)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~960 lines — consider splitting into routers/services modules (drive.py, documents.py, reports.py, seed.py) for maintainability.",
+    "Drive folder query string interpolation uses user/category-derived names directly into the Drive q= filter — currently safe (names are server constants), but if ever user-controlled, escape single quotes to prevent query injection.",
+    "POST /api/documents reads entire upload into memory (await file.read()) — fine for small docs, may be problematic for large PDFs; consider streaming for >10MB.",
+    "ObjectId is correctly excluded from responses via {'_id': 0} projection across all reads — good.",
+    "Startup auto-seeds without locking — in a multi-worker deployment this could race; acceptable for single-user app.",
+    "All endpoints respect /api prefix via APIRouter(prefix='/api') — verified.",
+    "CORS allow_credentials=True with allow_origins='*' will be rejected by browsers; for production, set explicit origin.",
+    "Pydantic validation could be tightened for figure_type, status, accountant_review (use Literal/Enum) — currently accepts any string."
+  ],
+  "updated_files": ["/app/backend/tests/test_tax_vault.py"],
+  "success_rate": {"backend": "100% (22/22)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "n/a — no auth in app",
+  "seed_data_creation": "None — relied on backend startup auto-seed (30 missing items + 6 PAYG figures). Tests use TEST_ prefixed temporary docs/figures/items and clean up after themselves.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All backend endpoints listed in the Stage 1 review request are verified working. Drive OAuth callback (/api/drive/callback) cannot be e2e-tested without a real Google consent — only authorization_url generation is validated. POST /api/documents WITHOUT Drive returns 200 and stores the doc record but file bytes are not persisted anywhere — flagged for product decision. Test file: /app/backend/tests/test_tax_vault.py (pytest, run with: pytest /app/backend/tests/test_tax_vault.py -v).",
+  "rca_of_the_issue": "n/a — no bugs to RCA."
+}
