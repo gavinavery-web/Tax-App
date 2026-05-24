@@ -479,11 +479,14 @@ async def drive_callback(
             logger.info("Restored PKCE code_verifier from drive_attempts")
         flow.fetch_token(code=code)
         credentials = flow.credentials
-        required = set(DRIVE_SCOPES)
-        granted = set(credentials.scopes or [])
-        if not required.issubset(granted):
-            missing = required - granted
-            err_msg = f"Missing Drive scopes: {', '.join(missing)}"
+        raw_granted = credentials.scopes or []
+        if isinstance(raw_granted, str):
+            raw_granted = raw_granted.split()
+        granted = set(raw_granted)
+        logger.info(f"OAuth granted scopes (raw): {raw_granted}")
+        has_drive_file = any('drive.file' in s for s in granted)
+        if not has_drive_file:
+            err_msg = f"drive.file scope not granted. Got: {list(granted)}"
             await db.drive_errors.update_one(
                 {"key": SINGLETON_KEY},
                 {"$set": {
