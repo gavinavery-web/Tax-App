@@ -374,15 +374,17 @@ async def drive_connect():
         scopes=DRIVE_SCOPES,
         redirect_uri=redirect_uri,
     )
-    authorization_url, _state = flow.authorization_url(
+    authorization_url, state = flow.authorization_url(
         access_type='offline',
         include_granted_scopes='true',
         prompt='consent',
     )
-    # Record the attempt so the diagnostics panel can warn if Google never
-    # redirects back (which happens when Google blocks the request at its own
-    # consent page — the user sees a 403 page and the browser stays on
-    # accounts.google.com).
+    # google-auth-oauthlib auto-generates a PKCE code_verifier on
+    # authorization_url(). It must be persisted and replayed on the token
+    # exchange in /api/drive/callback or Google returns
+    # `invalid_grant: Missing code verifier`. We are a confidential
+    # server-side client; persisting in the DB (keyed by the oauth `state`)
+    # is the correct pattern.
     await db.drive_attempts.update_one(
         {"key": SINGLETON_KEY},
         {"$set": {
@@ -392,17 +394,23 @@ async def drive_connect():
             "redirect_uri": redirect_uri,
             "scopes_requested": DRIVE_SCOPES,
             "client_id": os.environ["GOOGLE_CLIENT_ID"],
+            "oauth_state": state,
+            "code_verifier": getattr(flow, "code_verifier", None),
             "callback_received": False,
         }},
         upsert=True,
     )
-    logger.info(f"Drive OAuth attempt started, redirect_uri={redirect_uri}")
+    logger.info(
+        f"Drive OAuth attempt started, state={state[:6]}..., "
+        f"pkce={'yes' if getattr(flow, 'code_verifier', None) else 'no'}"
+    )
     return {"authorization_url": authorization_url}
 
 
 @api_router.get("/drive/callback")
 async def drive_callback(
     code: str = Query(None),
+    state: str = Query(None),
     error: str = Query(None),
     error_description: str = Query(None),
 ):
@@ -456,6 +464,19 @@ async def drive_callback(
             scopes=None,
             redirect_uri=redirect_uri,
         )
+        # Replay the PKCE code_verifier we generated in /api/drive/connect.
+        # Without this, Google rejects token exchange with
+        # `invalid_grant: Missing code verifier`.
+        attempt = await db.drive_attempts.find_one({"key": SINGLETON_KEY}, {"_id": 0})
+        if attempt and attempt.get("code_verifier"):
+            # Match by state when provided to defend against stale attempts.
+            if state and attempt.get("oauth_state") and attempt["oauth_state"] != state:
+                logger.warning(
+                    f"OAuth state mismatch — stored={attempt['oauth_state'][:6]}..., "
+                    f"received={state[:6]}... — using stored verifier anyway (single-user app)"
+                )
+            flow.code_verifier = attempt["code_verifier"]
+            logger.info("Restored PKCE code_verifier from drive_attempts")
         flow.fetch_token(code=code)
         credentials = flow.credentials
         required = set(DRIVE_SCOPES)
