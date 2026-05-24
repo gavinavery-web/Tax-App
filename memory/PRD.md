@@ -1,0 +1,51 @@
+# Tax Evidence Vault — PRD
+
+## Original problem statement
+Build Stage 1 of a private tax evidence management app to help gather and organise evidence for overdue Australian tax returns (FY2024 + FY2025). Upload → categorise → save to Drive → register → missing evidence tracker. No tax calculations, no AI extraction in Stage 1.
+
+## User persona
+Single private user (the owner). Single-user, no auth. Australian taxpayer with multiple income sources (PAYG from 3 employers per FY, Airbnb, Waggrakine rental, Heathridge property, Revive Pty Ltd) preparing evidence packs for accountant.
+
+## User decisions captured
+- Google Drive: **Full OAuth** (Drive-only storage)
+- Auth: **None** (single private user)
+- Storage: **Google Drive only** — uploads rejected if Drive not connected
+- Design: **Clean / minimal / spreadsheet-like**
+- Accountant summary export: **PDF** (reportlab)
+
+## Architecture
+- **Backend**: FastAPI + Motor (MongoDB). Single file `/app/backend/server.py`. Drive OAuth via `google-auth-oauthlib` + `googleapiclient`. PDF via `reportlab`.
+- **Frontend**: React 19 + react-router-dom v7 + shadcn UI + sonner toasts + lucide icons. Tailwind 3.
+- Single-user data is keyed by `SINGLETON_KEY="default"` (drive_credentials, drive_config collections).
+- Mongo collections: `documents`, `figures`, `missing_items`, `drive_credentials`, `drive_config`.
+- All routes prefixed `/api`. Drive callback `/api/drive/callback` configured in Google Cloud Console.
+
+## What's been implemented (Stage 1 — Feb 2026)
+- Dashboard: FY2024/FY2025 summary cards with PAYG income preloaded totals (FY2024 $27,388 / FY2025 $75,863), category cards (ATO, Airbnb, Waggrakine Rental, Heathridge, Revive, Bank Statements), Accountant Review Required card, Missing Documents card (count of 30 preloaded items).
+- Document upload: multipart with name, tax year, category, notes, accountant_review flag. Auto-routes to correct numbered Drive subfolder. Rejects upload if Drive not connected.
+- Evidence Register: searchable, filterable (category/year/review), spreadsheet-style dense table; click row to open detail dialog.
+- Document Detail dialog: edit metadata + add/delete manual figures (income/tax_withheld/expense/interest/liability/other) + Drive link.
+- Missing Evidence Tracker: 30 preloaded items grouped by priority (Critical 16, Important 9, Later 5). Inline status update, add custom items.
+- Reports: CSV exports (Evidence Register, Missing Evidence, Documents by Category) + PDF Accountant Summary (documents, key figures with subtotals, outstanding evidence, review items).
+- Settings: Google Drive connect → callback → initialize folder structure (parent "Tax Evidence Vault" + 11 numbered subfolders). Lists each subfolder with direct open link.
+- Auto-seed on backend startup: 30 missing items + 6 PAYG figures.
+- Backend tested 22/22 pytest cases (iteration_1.json).
+
+## Backlog / deferred
+### P1 — Stage 2 candidates
+- AI extraction of figures from uploaded PDFs/images (currently manual only — by Stage 1 design)
+- Bulk upload (drag-drop multiple files at once)
+- Local fallback storage when Drive is offline
+- "Final Accountant Pack" zip generator (combines reports + key docs)
+- Per-document version history
+- Multi-user mode + JWT auth
+
+### P2
+- Tax calculations & ATO lodgement helpers (explicitly out of Stage 1 scope per user)
+- OCR text search within uploaded documents
+- Inline Drive folder preview / file picker
+
+## Next tasks
+- Stage 2: AI-powered figure extraction (Claude Sonnet vision for PDFs/images) once user approves Stage 1.
+- Tighten Pydantic validation with Enums for figure_type/status/accountant_review.
+- Split server.py into routers (drive/documents/reports/seed) for maintainability if app grows.

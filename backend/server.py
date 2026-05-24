@@ -486,27 +486,31 @@ async def upload_document(
     drive_link = None
     drive_folder_id = None
 
-    # Try to upload to Drive if connected
+    # Drive is the only storage backend (per user choice). Require connection.
     creds = await get_drive_credentials_doc()
-    if creds:
-        try:
-            cfg = await get_or_create_folders()
-            drive_folder_id = cfg["subfolders"].get(folder_name)
-            service = await get_drive_service()
-            media = MediaIoBaseUpload(io.BytesIO(content), mimetype=file_type, resumable=False)
-            meta = {'name': file.filename, 'parents': [drive_folder_id]}
-            res = service.files().create(
-                body=meta,
-                media_body=media,
-                fields='id, webViewLink, webContentLink',
-            ).execute()
-            drive_file_id = res.get('id')
-            drive_link = res.get('webViewLink')
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.exception("Drive upload failed")
-            raise HTTPException(status_code=500, detail=f"Drive upload failed: {e}")
+    if not creds:
+        raise HTTPException(
+            status_code=400,
+            detail="Google Drive not connected. Open Settings → Connect Google Drive before uploading.",
+        )
+    try:
+        cfg = await get_or_create_folders()
+        drive_folder_id = cfg["subfolders"].get(folder_name)
+        service = await get_drive_service()
+        media = MediaIoBaseUpload(io.BytesIO(content), mimetype=file_type, resumable=False)
+        meta = {'name': file.filename, 'parents': [drive_folder_id]}
+        res = service.files().create(
+            body=meta,
+            media_body=media,
+            fields='id, webViewLink, webContentLink',
+        ).execute()
+        drive_file_id = res.get('id')
+        drive_link = res.get('webViewLink')
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Drive upload failed")
+        raise HTTPException(status_code=500, detail=f"Drive upload failed: {e}")
 
     doc = Document(
         name=name,
