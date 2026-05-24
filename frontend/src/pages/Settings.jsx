@@ -26,13 +26,14 @@ const Row = ({ label, value, mono = true, testid }) => (
 export default function Settings() {
   const [status, setStatus] = useState(null);
   const [diag, setDiag] = useState(null);
+  const [aiStats, setAiStats] = useState(null);
   const [busy, setBusy] = useState(false);
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
 
   const load = async () => {
-    const [s, d] = await Promise.all([api.get("/drive/status"), api.get("/diagnostics")]);
-    setStatus(s.data); setDiag(d.data);
+    const [s, d, ai] = await Promise.all([api.get("/drive/status"), api.get("/diagnostics"), api.get("/ai/stats")]);
+    setStatus(s.data); setDiag(d.data); setAiStats(ai.data);
   };
 
   useEffect(() => {
@@ -217,11 +218,24 @@ export default function Settings() {
       <div className="bg-white border border-zinc-200 rounded-sm mt-4 p-4 text-xs leading-relaxed text-zinc-700">
         <div className="font-semibold mb-1 text-sm" style={{ fontFamily: "Chivo" }}>If Google returns 403</div>
         <ol className="list-decimal ml-5 space-y-1">
-          <li>Confirm the OAuth client → <span className="mono">Authorized redirect URIs</span> contains the redirect URI shown above, byte-for-byte.</li>
-          <li>If the OAuth consent screen is in <span className="font-semibold">Testing</span>, add your Google account under <span className="mono">Test users</span>.</li>
-          <li>Confirm the <span className="mono">drive.file</span> scope is added to the consent screen.</li>
-          <li>The exact Google error is shown above under <span className="font-semibold">Last OAuth error</span>.</li>
+          <li>Confirm the OAuth client → <span className="mono">Authorized redirect URIs</span> contains the redirect URI shown above.</li>
+          <li>If the OAuth consent screen is in <span className="font-semibold">Testing</span>, add your account under <span className="mono">Test users</span>.</li>
+          <li>The exact Google error appears under <span className="font-semibold">Last OAuth error</span>.</li>
         </ol>
+      </div>
+
+      <div className="bg-white border border-zinc-200 rounded-sm mt-4" data-testid="ai-status-card">
+        <div className="px-4 py-2.5 border-b border-zinc-200">
+          <div className="text-sm font-semibold" style={{ fontFamily: "Chivo" }}>AI Classifier</div>
+        </div>
+        <div className="px-4 py-2">
+          <Row label="Status" value={aiStats?.status || "—"} testid="ai-status" />
+          <Row label="Model" value={aiStats?.model || "—"} testid="ai-model" />
+          <Row label="Documents processed" value={aiStats ? String(aiStats.documents_processed) : "—"} testid="ai-docs" />
+          <Row label="Total AI cost (USD)" value={aiStats ? `$${(aiStats.total_cost_usd || 0).toFixed(4)}` : "—"} testid="ai-cost" />
+          <Row label="Tokens in / out" value={aiStats ? `${aiStats.total_tokens_in} / ${aiStats.total_tokens_out}` : "—"} />
+          <Row label="Last AI error" value={aiStats?.last_error?.message || "None"} testid="ai-last-error" />
+        </div>
       </div>
     </div>
   );

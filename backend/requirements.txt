@@ -20,6 +20,7 @@ dnspython==2.8.0
 ecdsa==0.19.2
 email-validator==2.3.0
 emergentintegrations==0.1.0
+et_xmlfile==2.0.0
 fastapi==0.110.1
 fastuuid==0.14.0
 filelock==3.29.0
@@ -55,6 +56,7 @@ jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 librt==0.11.0
 litellm==1.80.0
+lxml==6.1.1
 markdown-it-py==4.2.0
 MarkupSafe==3.0.3
 mccabe==0.7.0
@@ -66,10 +68,14 @@ mypy_extensions==1.1.0
 numpy==2.4.6
 oauthlib==3.3.1
 openai==1.99.9
+openpyxl==3.1.5
 packaging==26.2
 pandas==3.0.3
 passlib==1.7.4
 pathspec==1.1.1
+pdf2image==1.17.0
+pdfminer.six==20251230
+pdfplumber==0.11.9
 pillow==12.2.0
 platformdirs==4.9.6
 pluggy==1.6.0
@@ -87,8 +93,11 @@ Pygments==2.20.0
 PyJWT==2.13.0
 pymongo==4.5.0
 pyparsing==3.3.2
+pypdfium2==5.8.0
+pytesseract==0.3.13
 pytest==9.0.3
 python-dateutil==2.9.0.post0
+python-docx==1.2.0
 python-dotenv==1.2.2
 python-jose==3.5.0
 python-multipart==0.0.29

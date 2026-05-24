@@ -1,50 +1,26 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { StatusPill } from "../components/StatusPill";
-import UploadDialog from "../components/UploadDialog";
-import { Button } from "../components/ui/button";
-import { Upload, AlertCircle, Cloud, CloudOff, Banknote } from "lucide-react";
+import { Cloud, CloudOff, AlertCircle, Banknote } from "lucide-react";
 import { fmtAUD } from "../lib/constants";
-import { Link, useSearchParams } from "react-router-dom";
-import { popPendingUpload } from "../lib/pendingUpload";
+import { Link } from "react-router-dom";
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
-  const [reference, setReference] = useState(null);
   const [drive, setDrive] = useState(null);
   const [paygFigures, setPaygFigures] = useState([]);
-  const [uploadOpen, setUploadOpen] = useState(false);
-  const [resumeFile, setResumeFile] = useState(null);
-  const [resumeMeta, setResumeMeta] = useState(null);
-  const [params, setParams] = useSearchParams();
 
   const load = async () => {
-    const [d, r, ds, pf] = await Promise.all([
+    const [d, ds, pf] = await Promise.all([
       api.get("/dashboard"),
-      api.get("/reference"),
       api.get("/drive/status"),
       api.get("/figures", { params: { } }),
     ]);
-    setData(d.data); setReference(r.data); setDrive(ds.data);
+    setData(d.data); setDrive(ds.data);
     setPaygFigures(pf.data.filter((f) => f.figure_type === "payg_income"));
   };
 
   useEffect(() => { load(); }, []);
-
-  // After OAuth redirect, restore the stashed upload and resume it automatically.
-  useEffect(() => {
-    if (params.get("retry") === "1") {
-      const pending = popPendingUpload();
-      params.delete("retry");
-      setParams(params, { replace: true });
-      if (pending) {
-        setResumeFile(pending.file);
-        setResumeMeta(pending.meta);
-        setUploadOpen(true);
-      }
-    }
-    // eslint-disable-next-line
-  }, []);
 
   const totalByYear = (year) => paygFigures.filter((f) => f.tax_year === year).reduce((s, f) => s + Number(f.amount), 0);
 
@@ -58,20 +34,17 @@ export default function Dashboard() {
         <div className="flex items-center gap-2">
           {drive && (
             <Link
-              to="/settings"
-              className={`pill ${drive.connected ? "" : ""}`}
+              to="/register"
+              className="pill"
               data-testid="drive-status-pill"
               style={drive.connected
                 ? { background: "#F0FDF4", color: "#166534", borderColor: "#BBF7D0" }
                 : { background: "#FEF2F2", color: "#991B1B", borderColor: "#FECACA" }}
             >
               {drive.connected ? <Cloud className="w-3 h-3" /> : <CloudOff className="w-3 h-3" />}
-              Drive {drive.connected ? "connected" : "not connected"}
+              Drive {drive.connected ? "connected" : "not connected"} · go to Register
             </Link>
           )}
-          <Button onClick={() => setUploadOpen(true)} className="rounded-sm bg-zinc-950 hover:bg-zinc-800" data-testid="dashboard-upload-btn">
-            <Upload className="w-4 h-4 mr-2" /> Upload document
-          </Button>
         </div>
       </div>
 
@@ -170,15 +143,6 @@ export default function Dashboard() {
         </table>
       </div>
 
-      <UploadDialog
-        open={uploadOpen}
-        onOpenChange={(v) => { setUploadOpen(v); if (!v) { setResumeFile(null); setResumeMeta(null); } }}
-        reference={reference}
-        onUploaded={load}
-        initialFile={resumeFile}
-        initialMeta={resumeMeta}
-        autoSubmit={!!resumeFile}
-      />
     </div>
   );
 }

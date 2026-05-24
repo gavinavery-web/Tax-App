@@ -51,6 +51,7 @@ LOCAL_UPLOADS_DIR = ROOT_DIR / "uploads"
 LOCAL_UPLOADS_DIR.mkdir(exist_ok=True)
 
 FOLDER_STRUCTURE = [
+    ("00 Inbox", "Inbox"),
     ("01 ATO", "ATO"),
     ("02 PAYG Income", "PAYG Income"),
     ("03 Airbnb", "Airbnb"),
@@ -304,25 +305,29 @@ async def get_drive_service():
 
 
 async def get_or_create_folders():
-    """Ensure parent folder + all subfolders exist. Returns config doc."""
+    """Ensure parent folder + all subfolders exist. Returns config doc.
+    Idempotent: re-checks for any new/missing subfolders in FOLDER_STRUCTURE."""
     cfg = await db.drive_config.find_one({"key": SINGLETON_KEY}, {"_id": 0})
-    if cfg and cfg.get("parent_folder_id"):
+    parent_id = (cfg or {}).get("parent_folder_id")
+    sub_ids: dict = dict((cfg or {}).get("subfolders") or {})
+    expected = [name for name, _ in FOLDER_STRUCTURE]
+    if cfg and parent_id and all(n in sub_ids for n in expected):
         return cfg
     service = await get_drive_service()
-    # Find or create parent
     parent_name = "Tax Evidence Vault"
-    q = f"mimeType='application/vnd.google-apps.folder' and name='{parent_name}' and trashed=false"
-    res = service.files().list(q=q, fields="files(id, name)").execute()
-    files = res.get('files', [])
-    if files:
-        parent_id = files[0]['id']
-    else:
-        folder_meta = {'name': parent_name, 'mimeType': 'application/vnd.google-apps.folder'}
-        parent = service.files().create(body=folder_meta, fields='id').execute()
-        parent_id = parent['id']
-    # Create subfolders
-    sub_ids = {}
+    if not parent_id:
+        q = f"mimeType='application/vnd.google-apps.folder' and name='{parent_name}' and trashed=false"
+        res = service.files().list(q=q, fields="files(id, name)").execute()
+        files = res.get('files', [])
+        if files:
+            parent_id = files[0]['id']
+        else:
+            folder_meta = {'name': parent_name, 'mimeType': 'application/vnd.google-apps.folder'}
+            parent = service.files().create(body=folder_meta, fields='id').execute()
+            parent_id = parent['id']
     for folder_name, _ in FOLDER_STRUCTURE:
+        if folder_name in sub_ids:
+            continue
         q = f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and '{parent_id}' in parents and trashed=false"
         res = service.files().list(q=q, fields="files(id, name)").execute()
         files = res.get('files', [])
@@ -808,6 +813,13 @@ async def update_document(doc_id: str, payload: DocumentUpdate):
     return await db.documents.find_one({"id": doc_id}, {"_id": 0})
 
 
+@api_router.patch("/documents/{doc_id}/figures")
+async def update_document_figures(doc_id: str, payload: dict):
+    figures = payload.get("figures") or []
+    await db.documents.update_one({"id": doc_id}, {"$set": {"headline_figures_json": figures, "updated_at": utc_now_iso()}})
+    return await db.documents.find_one({"id": doc_id}, {"_id": 0})
+
+
 @api_router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str):
     doc = await db.documents.find_one({"id": doc_id}, {"_id": 0})
@@ -1171,6 +1183,16 @@ async def root():
 
 
 app.include_router(api_router)
+
+# Mount the Stage-2 bulk upload + AI pipeline router
+from upload_pipeline import router as pipeline_router, init_pipeline
+init_pipeline(
+    db=db,
+    get_drive_service=get_drive_service,
+    get_or_create_folders=get_or_create_folders,
+    singleton_key=SINGLETON_KEY,
+)
+app.include_router(pipeline_router)
 
 app.add_middleware(
     CORSMiddleware,
