@@ -5,7 +5,8 @@ import UploadDialog from "../components/UploadDialog";
 import { Button } from "../components/ui/button";
 import { Upload, AlertCircle, Cloud, CloudOff, Banknote } from "lucide-react";
 import { fmtAUD } from "../lib/constants";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
+import { popPendingUpload } from "../lib/pendingUpload";
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
@@ -13,6 +14,9 @@ export default function Dashboard() {
   const [drive, setDrive] = useState(null);
   const [paygFigures, setPaygFigures] = useState([]);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [resumeFile, setResumeFile] = useState(null);
+  const [resumeMeta, setResumeMeta] = useState(null);
+  const [params, setParams] = useSearchParams();
 
   const load = async () => {
     const [d, r, ds, pf] = await Promise.all([
@@ -26,6 +30,21 @@ export default function Dashboard() {
   };
 
   useEffect(() => { load(); }, []);
+
+  // After OAuth redirect, restore the stashed upload and resume it automatically.
+  useEffect(() => {
+    if (params.get("retry") === "1") {
+      const pending = popPendingUpload();
+      params.delete("retry");
+      setParams(params, { replace: true });
+      if (pending) {
+        setResumeFile(pending.file);
+        setResumeMeta(pending.meta);
+        setUploadOpen(true);
+      }
+    }
+    // eslint-disable-next-line
+  }, []);
 
   const totalByYear = (year) => paygFigures.filter((f) => f.tax_year === year).reduce((s, f) => s + Number(f.amount), 0);
 
@@ -151,7 +170,15 @@ export default function Dashboard() {
         </table>
       </div>
 
-      <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} reference={reference} onUploaded={load} />
+      <UploadDialog
+        open={uploadOpen}
+        onOpenChange={(v) => { setUploadOpen(v); if (!v) { setResumeFile(null); setResumeMeta(null); } }}
+        reference={reference}
+        onUploaded={load}
+        initialFile={resumeFile}
+        initialMeta={resumeMeta}
+        autoSubmit={!!resumeFile}
+      />
     </div>
   );
 }

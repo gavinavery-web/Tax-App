@@ -1,14 +1,16 @@
 import React, { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Cloud, CloudOff, FolderPlus, Loader2, CheckCircle2, AlertCircle, ExternalLink, Unplug } from "lucide-react";
 import { toast } from "sonner";
+import { hasPendingUpload } from "../lib/pendingUpload";
 
 export default function Settings() {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
   const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
 
   const load = async () => {
     const r = await api.get("/drive/status");
@@ -18,8 +20,18 @@ export default function Settings() {
   useEffect(() => {
     load();
     const flag = params.get("drive");
-    if (flag === "connected") { toast.success("Google Drive connected!"); params.delete("drive"); setParams(params, { replace: true }); }
-    if (flag === "error") { toast.error(`Drive connection failed: ${params.get("msg") || ""}`); params.delete("drive"); params.delete("msg"); setParams(params, { replace: true }); }
+    if (flag === "connected") {
+      toast.success("Google Drive connected — folders ready.");
+      params.delete("drive"); setParams(params, { replace: true });
+      // If there's a stashed upload from before the OAuth round-trip, bounce home to resume it.
+      if (hasPendingUpload()) {
+        setTimeout(() => navigate("/?retry=1", { replace: true }), 300);
+      }
+    }
+    if (flag === "error") {
+      toast.error(`Drive connection failed: ${params.get("msg") || ""}`);
+      params.delete("drive"); params.delete("msg"); setParams(params, { replace: true });
+    }
     // eslint-disable-next-line
   }, []);
 

@@ -397,6 +397,11 @@ async def drive_callback(code: str = Query(...)):
             missing = required - granted
             raise HTTPException(status_code=400, detail=f"Missing Drive scopes: {missing}")
         await save_drive_credentials(credentials)
+        # Auto-initialize folder structure so user doesn't need a second click
+        try:
+            await get_or_create_folders()
+        except Exception as e:
+            logger.warning(f"Auto-folder-init after OAuth failed (will retry on demand): {e}")
         frontend = os.environ["FRONTEND_URL"]
         return RedirectResponse(url=f"{frontend}/settings?drive=connected")
     except HTTPException:
