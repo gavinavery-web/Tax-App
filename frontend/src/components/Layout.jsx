@@ -1,12 +1,16 @@
 import React, { useEffect } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Table2, AlertTriangle, FileBarChart2, Settings as SettingsIcon, ShieldCheck } from "lucide-react";
+import { LayoutDashboard, Table2, AlertTriangle, FileBarChart2, Settings as SettingsIcon, ShieldCheck, Receipt, Landmark, Home, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 
 const links = [
   { to: "/", end: true, label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard", shortcut: "⌘⇧D" },
   { to: "/register", label: "Evidence Register", icon: Table2, testid: "nav-register", shortcut: "⌘U" },
   { to: "/missing-evidence", label: "Missing Evidence", icon: AlertTriangle, testid: "nav-missing", shortcut: "⌘M" },
+  { to: "/tax-years", label: "Tax Years", icon: Receipt, testid: "nav-tax-years" },
+  { to: "/bank-transactions", label: "Bank Transactions", icon: Landmark, testid: "nav-bank-transactions" },
+  { to: "/properties", label: "Properties", icon: Home, testid: "nav-properties" },
+  { to: "/rubbish-bin", label: "Rubbish Bin", icon: Trash2, testid: "nav-rubbish-bin" },
   { to: "/reports", label: "Reports", icon: FileBarChart2, testid: "nav-reports" },
   { to: "/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings" },
 ];
@@ -46,7 +50,7 @@ export default function Layout() {
             <ShieldCheck className="w-5 h-5 text-zinc-900" strokeWidth={2.2} />
             <div>
               <div className="text-sm font-semibold tracking-tight" style={{ fontFamily: "Chivo" }}>Tax Evidence Vault</div>
-              <div className="text-[11px] text-zinc-500 mono">FY2024 · FY2025 · Stage 1</div>
+              <div className="text-[11px] text-zinc-500 mono">FY2024 · FY2025 · Stage 7</div>
             </div>
           </div>
         </div>

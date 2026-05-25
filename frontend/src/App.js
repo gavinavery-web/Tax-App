@@ -8,6 +8,12 @@ import EvidenceRegister from "@/pages/EvidenceRegister";
 import MissingEvidence from "@/pages/MissingEvidence";
 import Reports from "@/pages/Reports";
 import Settings from "@/pages/Settings";
+import TaxYears from "@/pages/TaxYears";
+import TaxYearBreakdown from "@/pages/TaxYearBreakdown";
+import BankTransactions from "@/pages/BankTransactions";
+import RubbishBin from "@/pages/RubbishBin";
+import Properties from "@/pages/Properties";
+import ManualEntry from "@/pages/ManualEntry";
 
 function App() {
   return (
@@ -21,6 +27,13 @@ function App() {
             <Route path="/missing" element={<MissingEvidence />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/settings" element={<Settings />} />
+            {/* Stage 7 Phase 3 */}
+            <Route path="/tax-years" element={<TaxYears />} />
+            <Route path="/tax-years/:year" element={<TaxYearBreakdown />} />
+            <Route path="/bank-transactions" element={<BankTransactions />} />
+            <Route path="/rubbish-bin" element={<RubbishBin />} />
+            <Route path="/properties" element={<Properties />} />
+            <Route path="/manual-entry" element={<ManualEntry />} />
           </Route>
         </Routes>
       </BrowserRouter>
