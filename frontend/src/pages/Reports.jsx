@@ -1,12 +1,12 @@
 import React from "react";
 import { API } from "../lib/api";
-import { FileDown, FileText, FolderTree, AlertOctagon } from "lucide-react";
+import { FileDown, FileText, FolderTree, AlertOctagon, FileType2 } from "lucide-react";
 
 const items = [
   {
     key: "register",
     title: "Evidence Register",
-    desc: "All uploaded documents with metadata, drive links, status and notes.",
+    desc: "All uploaded documents with AI metadata: risk level, headline figures (verified), counterparty, date range, Drive link, status and notes.",
     url: `${API}/reports/evidence-register.csv`,
     format: "CSV",
     icon: FileDown,
@@ -20,12 +20,20 @@ const items = [
     icon: AlertOctagon,
   },
   {
-    key: "summary",
-    title: "Accountant Summary",
+    key: "summary-pdf",
+    title: "Accountant Summary (PDF)",
     desc: "Polished PDF: documents received, manual figures entered, outstanding evidence and review items.",
     url: `${API}/reports/accountant-summary.pdf`,
     format: "PDF",
     icon: FileText,
+  },
+  {
+    key: "summary-txt",
+    title: "Accountant Summary (TXT)",
+    desc: "Plain-text snapshot — counts by category, tax year, risk; review items and outstanding evidence. Ideal for pasting into email.",
+    url: `${API}/reports/accountant-summary.txt`,
+    format: "TXT",
+    icon: FileType2,
   },
   {
     key: "bycat",
@@ -42,7 +50,7 @@ export default function Reports() {
     <div className="p-6 max-w-4xl" data-testid="reports-page">
       <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: "Chivo" }}>Reports & Exports</h1>
       <div className="text-sm text-zinc-500 mt-1 mb-6">
-        Downloads pull live data from your Evidence Register. All figures are manually entered — no AI extraction.
+        Downloads pull live data from your Evidence Register — AI-verified headline figures plus any manual figures.
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {items.map((it) => (

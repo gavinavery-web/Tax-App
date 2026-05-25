@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api } from "../lib/api";
+import { api, API } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
@@ -12,7 +12,7 @@ import UploadQueue from "../components/UploadQueue";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { fmtDate, fmtAUD } from "../lib/constants";
 import { TAX_YEAR_OPTIONS } from "../utils/taxYear";
-import { Upload, ExternalLink, Search, Filter, AlertTriangle, FolderUp, Files, Trash2 } from "lucide-react";
+import { Upload, ExternalLink, Search, Filter, AlertTriangle, FolderUp, Files, Trash2, Download, FileText } from "lucide-react";
 import { toast } from "sonner";
 
 const ACCEPTED = ".pdf,.png,.jpg,.jpeg,.webp,.heic,.heif,.xls,.xlsx,.csv,.doc,.docx,.txt";
@@ -251,6 +251,24 @@ export default function EvidenceRegister() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: "Chivo" }}>Evidence Register</h1>
           <div className="text-sm text-zinc-500 mt-1">Drag files or a folder to bulk-upload. Each document is classified by AI, filed to Google Drive, and stored locally as a vault copy.</div>
+        </div>
+        <div className="flex gap-2">
+          <a
+            href={`${API}/reports/evidence-register.csv`}
+            className="inline-flex items-center gap-1 rounded-sm border border-zinc-200 bg-white hover:bg-zinc-50 text-sm px-3 py-1.5"
+            data-testid="export-register-csv"
+            download
+          >
+            <Download className="w-4 h-4" /> Export CSV
+          </a>
+          <a
+            href={`${API}/reports/accountant-summary.txt`}
+            className="inline-flex items-center gap-1 rounded-sm border border-zinc-200 bg-white hover:bg-zinc-50 text-sm px-3 py-1.5"
+            data-testid="export-summary-txt"
+            download
+          >
+            <FileText className="w-4 h-4" /> Accountant summary
+          </a>
         </div>
       </div>
 

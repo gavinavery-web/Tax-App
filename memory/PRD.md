@@ -43,6 +43,12 @@ Single private user (the owner). Single-user, no auth. Australian taxpayer with 
   - **Ctrl/⌘+U** keyboard shortcut opens the quick-upload picker.
   - Embedded `<UploadQueue>` shows live processing + AI auto-match status without leaving the page.
   - Backend PATCH `/api/missing-evidence/{id}` now accepts `notes_user` so user notes never overwrite the canonical seed helper text.
+- **Stage 3 — Accountant Pack exports (Feb 25, 2026)**:
+  - `/api/reports/evidence-register.csv` rewritten with 25 columns: document type, risk level, counterparty, date range, AI-verified headline figures (with confidence), manual figures, AI model used, AI cost, Drive folder/link, accountant review reason, status, notes.
+  - New `/api/reports/accountant-summary.txt` — plain-text snapshot grouping totals by category, tax year, risk; review items and outstanding evidence by priority. Email-friendly companion to the existing PDF.
+  - Reports page now lists 5 downloads (Evidence Register CSV, Missing Evidence CSV, Accountant Summary PDF, Accountant Summary TXT, Documents by Category CSV).
+  - Inline "Export CSV" + "Accountant summary" buttons in the Evidence Register header.
+  - Sidebar footer updated: "Stage 1 + 2 · Hybrid AI".
 
 ## Backlog / deferred
 ### P1 — Stage 2 candidates

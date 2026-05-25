@@ -1013,31 +1013,52 @@ async def export_evidence_register():
     async for f in db.figures.find({"document_id": {"$ne": None}}, {"_id": 0}):
         figs_by_doc.setdefault(f["document_id"], []).append(f)
     headers = [
-        "Date uploaded", "Document name", "File type", "Google Drive folder",
-        "Google Drive link", "Tax year", "Category", "Key figures found",
-        "What it proves", "Missing follow-up", "Accountant review required",
+        "Date uploaded", "Document name", "Original filename", "File type",
+        "Tax year", "Tax year confidence", "Category", "Category confidence",
+        "Document type", "Risk level", "Counterparty",
+        "Date range from", "Date range to",
+        "Headline figures (AI verified)", "Manual figures",
+        "One-line summary", "What it proves",
+        "Accountant review required", "Accountant review reason",
+        "AI model used", "AI cost (USD)",
+        "Google Drive folder", "Google Drive link",
         "Status", "Notes",
     ]
     rows = []
     for d in docs:
-        figs = figs_by_doc.get(d["id"], [])
-        kf = d.get("key_figures_found") or "; ".join(
-            f"{x['figure_type']}={x['amount']}" for x in figs
+        manual_figs = figs_by_doc.get(d["id"], [])
+        manual_text = "; ".join(f"{x.get('figure_type','')}={x.get('amount','')}" for x in manual_figs)
+        ai_figs = d.get("headline_figures_json") or []
+        ai_text = "; ".join(
+            f"{(f.get('label') or f.get('type') or '').strip()}: {f.get('amount','')} ({f.get('confidence','') or 'unspecified'})"
+            for f in ai_figs if isinstance(f, dict)
         )
         rows.append([
             d.get("created_at", ""),
             d.get("name", ""),
+            d.get("original_filename", ""),
             d.get("file_type", ""),
-            d.get("drive_folder_name", ""),
-            d.get("drive_link", ""),
             d.get("tax_year", ""),
+            d.get("tax_year_confidence", ""),
             d.get("category", ""),
-            kf,
-            d.get("what_it_proves", ""),
-            d.get("missing_followup", ""),
-            d.get("accountant_review", ""),
+            d.get("category_confidence", ""),
+            d.get("document_type", ""),
+            d.get("risk_level", ""),
+            d.get("counterparty", "") or "",
+            d.get("date_range_from", "") or "",
+            d.get("date_range_to", "") or "",
+            ai_text,
+            manual_text,
+            d.get("one_line_summary", "") or "",
+            d.get("what_it_proves", "") or "",
+            "Yes" if d.get("accountant_review_required") else d.get("accountant_review", "No"),
+            d.get("accountant_review_reason", "") or "",
+            d.get("final_model_used", "") or d.get("ai_model_used", "") or "",
+            f"{(d.get('total_ai_cost_usd') or d.get('ai_cost_usd') or 0):.4f}",
+            d.get("drive_folder_name", ""),
+            d.get("drive_link", "") or "",
             d.get("status", ""),
-            d.get("notes", ""),
+            d.get("user_notes", "") or d.get("notes", ""),
         ])
     return csv_response(headers, rows, "evidence-register.csv")
 
@@ -1063,6 +1084,110 @@ async def export_by_category():
         counts[key] = counts.get(key, 0) + 1
     rows = [[k[0], k[1], v] for k, v in sorted(counts.items())]
     return csv_response(headers, rows, "documents-by-category.csv")
+
+
+@api_router.get("/reports/accountant-summary.txt")
+async def export_accountant_summary_txt():
+    """Plain-text accountant summary — email-friendly companion to the PDF."""
+    docs = await db.documents.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    missing = await db.missing_items.find({}, {"_id": 0}).to_list(5000)
+
+    lines = []
+    sep = "=" * 80
+    dash = "-" * 80
+    lines.append(sep)
+    lines.append("TAX EVIDENCE VAULT — ACCOUNTANT SUMMARY")
+    lines.append(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
+    lines.append(sep)
+    lines.append("")
+
+    # Counts by category
+    cat_counts: dict[str, int] = {}
+    for d in docs:
+        cat_counts[d.get("category") or "Unknown"] = cat_counts.get(d.get("category") or "Unknown", 0) + 1
+    lines.append(f"TOTAL DOCUMENTS: {len(docs)}")
+    lines.append("")
+    lines.append("DOCUMENTS BY CATEGORY:")
+    lines.append(dash)
+    for cat in sorted(cat_counts.keys()):
+        lines.append(f"  {cat:<40s} {cat_counts[cat]:>4d}")
+    lines.append("")
+
+    # Counts by tax year
+    yr_counts: dict[str, int] = {}
+    for d in docs:
+        yr_counts[d.get("tax_year") or "Unsure"] = yr_counts.get(d.get("tax_year") or "Unsure", 0) + 1
+    lines.append("DOCUMENTS BY TAX YEAR:")
+    lines.append(dash)
+    for yr in sorted(yr_counts.keys()):
+        lines.append(f"  {yr:<40s} {yr_counts[yr]:>4d}")
+    lines.append("")
+
+    # Risk distribution
+    risk_counts = {"Green": 0, "Amber": 0, "Red": 0, "Unknown": 0}
+    for d in docs:
+        risk_counts[d.get("risk_level") or "Unknown"] = risk_counts.get(d.get("risk_level") or "Unknown", 0) + 1
+    lines.append("AI RISK DISTRIBUTION:")
+    lines.append(dash)
+    for r in ["Green", "Amber", "Red", "Unknown"]:
+        lines.append(f"  {r:<40s} {risk_counts.get(r, 0):>4d}")
+    lines.append("")
+
+    # Accountant review items
+    review_docs = [d for d in docs if d.get("accountant_review_required") or d.get("accountant_review") == "Yes"]
+    lines.append(f"ITEMS NEEDING ACCOUNTANT REVIEW: {len(review_docs)}")
+    lines.append(dash)
+    for d in review_docs:
+        lines.append(f"  - {d.get('original_filename') or d.get('name') or ''}")
+        if d.get("accountant_review_reason"):
+            lines.append(f"      Reason: {d['accountant_review_reason']}")
+        if d.get("category") or d.get("tax_year"):
+            lines.append(f"      Category: {d.get('category','')}  Tax year: {d.get('tax_year','')}")
+    lines.append("")
+
+    # Missing evidence — outstanding, grouped by priority
+    outstanding = [m for m in missing if (m.get("status") or "Outstanding") == "Outstanding"]
+    by_pri = {"Critical": [], "Important": [], "Later": []}
+    for m in outstanding:
+        by_pri.setdefault(m.get("priority") or "Later", []).append(m)
+    lines.append(f"OUTSTANDING EVIDENCE: {len(outstanding)} items")
+    lines.append(dash)
+    for pri in ["Critical", "Important", "Later"]:
+        bucket = by_pri.get(pri, [])
+        if not bucket:
+            continue
+        lines.append(f"  [{pri}] — {len(bucket)} items")
+        for m in bucket:
+            lines.append(f"    - {m.get('item_description') or m.get('item_needed') or ''}"
+                         f"  ({m.get('category','')} / {m.get('tax_year','')})")
+        lines.append("")
+
+    # Possible matches awaiting review
+    poss = [m for m in missing if m.get("status") == "Possible Match"]
+    if poss:
+        lines.append(f"POSSIBLE MATCHES — REVIEW REQUIRED: {len(poss)}")
+        lines.append(dash)
+        for m in poss:
+            lines.append(f"  - {m.get('item_description','')}")
+            if m.get("matched_document_name"):
+                lines.append(f"      Matched doc: {m['matched_document_name']} ({m.get('match_confidence','')})")
+            if m.get("match_reason"):
+                lines.append(f"      Reason: {m['match_reason']}")
+        lines.append("")
+
+    lines.append(sep)
+    lines.append("For full details, see attached:")
+    lines.append("  - evidence-register.csv")
+    lines.append("  - missing-evidence.csv")
+    lines.append("  - accountant-summary.pdf (formatted version)")
+    lines.append(sep)
+
+    content = "\n".join(lines) + "\n"
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="accountant-summary.txt"'},
+    )
 
 
 @api_router.get("/reports/accountant-summary.pdf")

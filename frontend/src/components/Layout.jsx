@@ -45,8 +45,8 @@ export default function Layout() {
         </nav>
         <div className="px-4 py-3 border-t border-zinc-200 text-[11px] text-zinc-500 mono leading-relaxed">
           Private · Single user<br />
-          Figures: manual only<br />
-          Stage 1 · No AI extraction
+          Figures: AI-verified + manual<br />
+          Stage 1 + 2 · Hybrid AI
         </div>
       </aside>
       <main className="flex-1 min-w-0">
