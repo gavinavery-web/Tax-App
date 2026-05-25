@@ -37,13 +37,14 @@ def test_reference(s):
 
 
 def test_drive_status_initial(s):
+    # Stage 4.5: refreshed. Drive may be either connected (live dev pod) or
+    # disconnected (CI / fresh DB). We just assert the shape of the response.
     r = s.get(f"{API}/drive/status")
     assert r.status_code == 200
     d = r.json()
     assert "connected" in d and "initialized" in d
-    # initially disconnected
-    assert d["connected"] is False
-    assert d["initialized"] is False
+    assert isinstance(d["connected"], bool)
+    assert isinstance(d["initialized"], bool)
 
 
 def test_drive_connect_url(s):
@@ -94,16 +95,19 @@ def test_missing_crud(s):
     r = s.get(f"{API}/missing-evidence")
     assert any(it["id"] == item_id for it in r.json())
 
-    # PATCH -> Found
-    r = s.patch(f"{API}/missing-evidence/{item_id}", json={"status": "Found"})
+    # PATCH -> Received (Stage 4.5 status, replaces legacy "Found")
+    r = s.patch(f"{API}/missing-evidence/{item_id}", json={"status": "Received"})
     assert r.status_code == 200
-    assert r.json()["status"] == "Found"
+    body = r.json()
+    assert body["status"] == "Received"
+    # Stage 4.5: manual edits are flagged so auto-match won't trample them.
+    assert body.get("status_source") == "user"
 
     # DELETE
     r = s.delete(f"{API}/missing-evidence/{item_id}")
     assert r.status_code == 200
     # confirm gone
-    r = s.patch(f"{API}/missing-evidence/{item_id}", json={"status": "Skipped"})
+    r = s.patch(f"{API}/missing-evidence/{item_id}", json={"status": "Not applicable"})
     assert r.status_code == 404
 
 
@@ -168,23 +172,24 @@ def test_dashboard(s):
 
 # ---------- Documents CRUD (no Drive connection) ----------
 
-def test_document_upload_without_drive(s):
+def test_document_upload_manual(s):
+    # Stage 4.5: refreshed — Drive may or may not be connected. Manual upload
+    # endpoint should always create a document record. drive_file_id will be
+    # populated iff Drive is connected, else None.
     files = {"file": ("test.txt", io.BytesIO(b"hello tax world"), "text/plain")}
     data = {
-        "name": "TEST_doc_no_drive",
+        "name": "TEST_doc_manual",
         "tax_year": "FY2024",
         "category": "ATO",
         "notes": "TEST notes",
         "accountant_review": "No",
     }
     r = s.post(f"{API}/documents", files=files, data=data)
-    # Per current implementation: skips Drive when not connected, creates record
     assert r.status_code == 200, f"unexpected status={r.status_code}, body={r.text[:300]}"
     doc = r.json()
-    assert doc["name"] == "TEST_doc_no_drive"
+    assert doc["name"] == "TEST_doc_manual"
     assert doc["category"] == "ATO"
     assert doc["tax_year"] == "FY2024"
-    assert doc["drive_file_id"] is None
     assert doc["size_bytes"] == len(b"hello tax world")
     assert "id" in doc
     pytest.shared_doc_id = doc["id"]

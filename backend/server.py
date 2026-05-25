@@ -908,6 +908,9 @@ async def create_missing(payload: MissingItemCreate):
     d["match_reason"] = None
     d["updated_at"] = me.utc_now_iso()
     await db.missing_items.insert_one(d)
+    # `insert_one` mutates `d` by adding ObjectId `_id` which can't be
+    # JSON-serialised — strip it before returning.
+    d.pop("_id", None)
     return d
 
 
@@ -924,6 +927,16 @@ async def update_missing(item_id: str, payload: dict):
     patch["updated_at"] = me.utc_now_iso()
     if "item_description" in patch:
         patch["item_needed"] = patch["item_description"]
+    # Stage 4.5: track manual overrides so auto-matching doesn't trample them.
+    # Reset to "Outstanding" clears the manual flag (explicit re-evaluation
+    # signal from the user).
+    if "status" in patch:
+        if patch["status"] == "Outstanding":
+            patch["status_source"] = "system"
+        else:
+            patch["status_source"] = "user"
+            patch["status_updated_by"] = "user"
+        patch["status_updated_at"] = me.utc_now_iso()
     res = await db.missing_items.update_one({"id": item_id}, {"$set": patch})
     if res.matched_count == 0:
         raise HTTPException(404, "Item not found")
@@ -966,7 +979,10 @@ async def dashboard():
         elif card["type"] == "review":
             matching = [d for d in all_docs if d.get("accountant_review") == "Yes"]
         elif card["type"] == "missing":
-            count = await db.missing_items.count_documents({"status": {"$ne": "Found"}})
+            # Stage 4.5: count only items the user still owes — i.e. not yet
+            # confirmed Received and not flagged Not applicable.
+            OPEN_STATUSES = ["Outstanding", "Possible Match", "Accountant Review"]
+            count = await db.missing_items.count_documents({"status": {"$in": OPEN_STATUSES}})
             cards.append({**card, "documents": count, "status": "Partial" if count > 0 else "Complete"})
             continue
         else:
@@ -1279,7 +1295,10 @@ async def export_accountant_pdf():
 
     # Missing
     story.append(PageBreak())
-    open_missing = [m for m in missing if m.get("status") != "Found"]
+    # Stage 4.5: outstanding ≠ legacy "status != Found". Only show items the
+    # user still has work to do on.
+    OPEN_STATUSES = {"Outstanding", "Possible Match", "Accountant Review"}
+    open_missing = [m for m in missing if (m.get("status") or "Outstanding") in OPEN_STATUSES]
     story.append(Paragraph(f"Outstanding evidence ({len(open_missing)})", h2))
     if open_missing:
         rows = [["Priority", "Item", "Category", "FY", "Where to find"]]

@@ -218,11 +218,18 @@ def validate_schema(result: dict, source_text: str) -> dict:
 
 # ---------- Model calls (both via emergentintegrations + EMERGENT_LLM_KEY) ---
 
-async def _call_model(provider: str, model: str, system: str, user: str) -> tuple[Optional[dict], int, int, str]:
-    """Returns (parsed_json_or_None, in_tokens_est, out_tokens_est, raw_text)."""
+async def _call_model(provider: str, model: str, system: str, user: str) -> tuple[Optional[dict], int, int, str, Optional[str]]:
+    """Returns (parsed_json_or_None, in_tokens_est, out_tokens_est, raw_text, error_str).
+
+    `error_str` is non-None when the call failed. It contains enough signal
+    for `classify_ai_error()` to map to a stable ErrorCode (timeout / 429 /
+    rate_limit / quota / overloaded / generic). Caller is responsible for
+    forwarding it to the queue row.
+    """
     api_key = os.environ.get("EMERGENT_LLM_KEY")
     if not api_key:
-        return None, 0, 0, ""
+        return None, 0, 0, "", "no_emergent_llm_key"
+    raw = ""
     try:
         chat = LlmChat(
             api_key=api_key,
@@ -235,13 +242,16 @@ async def _call_model(provider: str, model: str, system: str, user: str) -> tupl
         parsed = json.loads(cleaned)
         in_tok = max(1, (len(system) + len(user)) // 4)
         out_tok = max(1, len(raw) // 4)
-        return parsed, in_tok, out_tok, raw
+        return parsed, in_tok, out_tok, raw, None
+    except asyncio.TimeoutError as e:
+        logger.warning(f"{provider}:{model} timed out: {e}")
+        return None, 0, 0, raw, f"timeout: {e}"
     except json.JSONDecodeError as e:
         logger.warning(f"{provider}:{model} non-JSON response: {e}")
-        return None, 0, 0, raw if "raw" in locals() else ""
+        return None, 0, 0, raw, f"non_json_response: {e}"
     except Exception as e:
         logger.warning(f"{provider}:{model} call failed: {e}")
-        return None, 0, 0, ""
+        return None, 0, 0, raw, str(e)
 
 
 def _user_message(filename: str, mime: str, text: str, gemini_result: Optional[dict] = None, escalation_reason: Optional[str] = None) -> str:
@@ -306,17 +316,24 @@ async def classify_document(filename: str, mime: str, source_text: str) -> dict:
     user = _user_message(filename, mime, source_text)
 
     # --- Step 1: Gemini ------------------------------------------------------
-    g_parsed, g_in, g_out, g_raw = await _call_model("gemini", GEMINI_MODEL, brain, user)
+    g_parsed, g_in, g_out, g_raw, g_err = await _call_model("gemini", GEMINI_MODEL, brain, user)
     gemini_cost = _cost(g_in, g_out, GEMINI_PRICE_IN, GEMINI_PRICE_OUT)
 
     if not g_parsed:
         # Gemini failed → escalate straight to Claude
-        c_parsed, c_in, c_out, c_raw = await _call_model(
+        c_parsed, c_in, c_out, c_raw, c_err = await _call_model(
             "anthropic", CLAUDE_MODEL, brain,
             _user_message(filename, mime, source_text),
         )
         claude_cost = _cost(c_in, c_out, CLAUDE_PRICE_IN, CLAUDE_PRICE_OUT)
         if not c_parsed:
+            # Real reason — pick the most informative one. Both errors are
+            # surfaced so classify_ai_error() can choose timeout / rate-limit
+            # / generic.
+            combined_err = " | ".join(filter(None, [
+                f"gemini: {g_err}" if g_err else None,
+                f"claude: {c_err}" if c_err else None,
+            ])) or "Both models returned no parseable result"
             return {
                 "ok": False,
                 "analysis": validate_schema({
@@ -335,7 +352,7 @@ async def classify_document(filename: str, mime: str, source_text: str) -> dict:
                 "gemini_cost_usd": gemini_cost,
                 "claude_cost_usd": claude_cost,
                 "total_ai_cost_usd": gemini_cost + claude_cost,
-                "error": "Both models failed",
+                "error": combined_err,
             }
         analysis = validate_schema(c_parsed, source_text)
         return {
@@ -377,7 +394,7 @@ async def classify_document(filename: str, mime: str, source_text: str) -> dict:
 
     # --- Step 3: Claude ------------------------------------------------------
     logger.info(f"Escalating to Claude: {reason}")
-    c_parsed, c_in, c_out, c_raw = await _call_model(
+    c_parsed, c_in, c_out, c_raw, c_err = await _call_model(
         "anthropic", CLAUDE_MODEL, brain,
         _user_message(filename, mime, source_text, gemini_result=g_parsed, escalation_reason=reason),
     )
@@ -402,7 +419,7 @@ async def classify_document(filename: str, mime: str, source_text: str) -> dict:
         }
 
     # Claude failed — fall back to Gemini result with downgraded confidence
-    logger.warning(f"Claude escalation failed — keeping Gemini result with downgraded confidence ({reason})")
+    logger.warning(f"Claude escalation failed — keeping Gemini result with downgraded confidence ({reason}); claude_err={c_err}")
     g_parsed["category_confidence"] = "Unsure"
     g_parsed["risk_level"] = "Amber"
     g_parsed["accountant_review_required"] = True
@@ -425,4 +442,5 @@ async def classify_document(filename: str, mime: str, source_text: str) -> dict:
         "claude_cost_usd": claude_cost,
         "total_ai_cost_usd": gemini_cost + claude_cost,
         "raw": g_raw[:2000],
+        "error": f"claude: {c_err}" if c_err else None,
     }

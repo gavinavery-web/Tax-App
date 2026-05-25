@@ -129,7 +129,7 @@ async def bulk_upload(files: list[UploadFile] = File(...)):
         elif empty:
             initial_status, err_code, err_msg = "Error", ErrorCode.FILE_EMPTY, ERROR_MESSAGES[ErrorCode.FILE_EMPTY]
         elif existing:
-            initial_status, err_code, err_msg = "Duplicate?", None, None
+            initial_status, err_code, err_msg = "Duplicate?", ErrorCode.FILE_DUPLICATE, ERROR_MESSAGES[ErrorCode.FILE_DUPLICATE]
         else:
             initial_status, err_code, err_msg = "Queued", None, None
         await _db.upload_queue.insert_one({
@@ -199,24 +199,47 @@ async def queue_decision(qid: str, payload: dict):
 
 @router.delete("/uploads/queue/{qid}")
 async def cancel_one(qid: str):
+    """Cancel a single queued, duplicate, or active row.
+    For Queued/Duplicate? we terminate immediately. For active rows
+    (Uploading/Reading/Classifying) we flag cancel_requested=True and the
+    worker stops at the next checkpoint."""
     item = await _db.upload_queue.find_one({"id": qid}, {"_id": 0})
     if not item:
         raise HTTPException(404, "not found")
-    if item.get("status") in ("Queued", "Duplicate?"):
+    status = item.get("status")
+    if status in ("Queued", "Duplicate?"):
         try:
             p = Path(item.get("staging_path") or "")
             if p.exists():
                 p.unlink()
         except Exception:
             pass
-    await _db.upload_queue.update_one({"id": qid}, {"$set": {"status": "Cancelled", "completed_at": utc_now_iso()}})
-    return {"ok": True}
+        await _db.upload_queue.update_one(
+            {"id": qid},
+            {"$set": {
+                "status": "Cancelled",
+                "error_code": ErrorCode.CANCELLED,
+                "error": ERROR_MESSAGES[ErrorCode.CANCELLED],
+                "completed_at": utc_now_iso(),
+            }},
+        )
+        return {"ok": True, "mode": "immediate"}
+    if status in ("Uploading", "Reading", "Classifying"):
+        # Cooperative cancellation — worker stops at next checkpoint.
+        await _db.upload_queue.update_one({"id": qid}, {"$set": {"cancel_requested": True}})
+        return {"ok": True, "mode": "cooperative"}
+    return {"ok": True, "mode": "noop"}
 
 
 @router.delete("/uploads/queue")
 async def cancel_all():
+    """Cancel all queued + duplicate + active rows.
+    Queued/Duplicate? terminate immediately; active rows get
+    cancel_requested=True and the worker stops at next checkpoint."""
+    immediate = ["Queued", "Duplicate?"]
+    cooperative = ["Uploading", "Reading", "Classifying"]
     items = await _db.upload_queue.find(
-        {"status": {"$in": ["Queued", "Duplicate?"]}}, {"_id": 0, "id": 1, "staging_path": 1}
+        {"status": {"$in": immediate}}, {"_id": 0, "id": 1, "staging_path": 1}
     ).to_list(5000)
     for it in items:
         try:
@@ -225,11 +248,20 @@ async def cancel_all():
                 p.unlink()
         except Exception:
             pass
-    await _db.upload_queue.update_many(
-        {"status": {"$in": ["Queued", "Duplicate?"]}},
-        {"$set": {"status": "Cancelled", "completed_at": utc_now_iso()}},
+    res_imm = await _db.upload_queue.update_many(
+        {"status": {"$in": immediate}},
+        {"$set": {
+            "status": "Cancelled",
+            "error_code": ErrorCode.CANCELLED,
+            "error": ERROR_MESSAGES[ErrorCode.CANCELLED],
+            "completed_at": utc_now_iso(),
+        }},
     )
-    return {"ok": True}
+    res_coop = await _db.upload_queue.update_many(
+        {"status": {"$in": cooperative}},
+        {"$set": {"cancel_requested": True}},
+    )
+    return {"ok": True, "immediate": res_imm.modified_count, "cooperative": res_coop.modified_count}
 
 
 @router.delete("/uploads/queue/finished/clear")
@@ -333,6 +365,26 @@ async def ai_stats():
     }
 
 
+AI_TIMEOUT_SECONDS = int(os.environ.get("AI_TIMEOUT_SECONDS", "60"))
+
+
+class _Cancelled(Exception):
+    """Cooperative-cancellation sentinel — raised by checkpoints inside the
+    worker; caught by `_process_one` so the row terminates cleanly without
+    creating a document or touching missing-evidence."""
+
+
+async def _check_cancelled(qid: str) -> bool:
+    """Returns True if `cancel_requested` is set on the queue row."""
+    row = await _db.upload_queue.find_one({"id": qid}, {"_id": 0, "cancel_requested": 1})
+    return bool(row and row.get("cancel_requested"))
+
+
+async def _raise_if_cancelled(qid: str):
+    if await _check_cancelled(qid):
+        raise _Cancelled()
+
+
 # ---------- Worker -----------------------------------------------------------
 
 async def _run_worker():
@@ -347,17 +399,43 @@ async def _run_worker():
             return
         try:
             await _process_one(item)
+        except _Cancelled:
+            await _finalize_cancelled(item)
         except Exception as e:
-            logger.exception(f"Pipeline crash on {item.get('id')}")
+            # Stage 4.5 — never leak raw exception text to the user.
+            logger.exception(f"Pipeline crash on {item.get('id')}: {e}")
             await _db.upload_queue.update_one(
                 {"id": item["id"]},
                 {"$set": {
                     "status": "Error",
-                    "error": str(e)[:500],
+                    "error": ERROR_MESSAGES[ErrorCode.UNEXPECTED_ERROR],
                     "error_code": ErrorCode.UNEXPECTED_ERROR,
                     "completed_at": utc_now_iso(),
                 }},
             )
+
+
+async def _finalize_cancelled(item: dict):
+    qid = item["id"]
+    # Try to clean up the staging file — safe even mid-pipeline because we
+    # never inserted a document row.
+    try:
+        p = Path(item.get("staging_path") or "")
+        if p.exists():
+            p.unlink()
+    except Exception:
+        pass
+    await _db.upload_queue.update_one(
+        {"id": qid},
+        {"$set": {
+            "status": "Cancelled",
+            "error_code": ErrorCode.CANCELLED,
+            "error": ERROR_MESSAGES[ErrorCode.CANCELLED],
+            "cancel_requested": False,
+            "completed_at": utc_now_iso(),
+        }},
+    )
+    logger.info(f"Cancelled mid-pipeline: {qid}")
 
 
 async def _process_one(item: dict):
@@ -376,13 +454,24 @@ async def _process_one(item: dict):
     filename = item["filename"] or "file"
     mime = item.get("mime") or "application/octet-stream"
 
+    # Checkpoint — before extraction
+    await _raise_if_cancelled(qid)
+
     # Step 3 — extract text
     await _db.upload_queue.update_one({"id": qid}, {"$set": {"status": "Reading"}})
     text = ""
+    extraction_failed = False
     try:
         text = extract_text(content, filename, mime)
     except Exception as e:
         logger.warning(f"extract_text failed: {e}")
+        extraction_failed = True
+    if not extraction_failed and (not text or len(text.strip()) < 10):
+        # Allow filing but flag for manual review and skip auto-matching.
+        extraction_failed = True
+
+    # Checkpoint — after extraction
+    await _raise_if_cancelled(qid)
 
     # Step 4 — AI (with cache by SHA)
     await _db.upload_queue.update_one({"id": qid}, {"$set": {"status": "Classifying"}})
@@ -396,14 +485,54 @@ async def _process_one(item: dict):
             "model": cache.get("model", os.environ.get("ANTHROPIC_MODEL", "")),
         }
     else:
+        # Checkpoint — before AI
+        await _raise_if_cancelled(qid)
         async with _AI_SEM:
-            result = await classify_document(filename, mime, text)
+            # Hard 60s timeout — if AI hangs the whole queue would otherwise
+            # stall. Cooperative cancellation also checked after the call.
+            try:
+                result = await asyncio.wait_for(
+                    classify_document(filename, mime, text),
+                    timeout=AI_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"AI classification timed out (>{AI_TIMEOUT_SECONDS}s) for {filename}")
+                # Hard fail with stable code; staging file is left intact so
+                # the user can use Retry to re-queue.
+                await _db.upload_queue.update_one(
+                    {"id": qid},
+                    {"$set": {
+                        "status": "Error",
+                        "error": ERROR_MESSAGES[ErrorCode.AI_TIMEOUT],
+                        "error_code": ErrorCode.AI_TIMEOUT,
+                        "completed_at": utc_now_iso(),
+                    }},
+                )
+                return
+        # Checkpoint — after AI
+        await _raise_if_cancelled(qid)
         if not result.get("ok") or not result.get("analysis"):
+            ai_err = result.get("error") or "AI failed"
+            ai_code = classify_ai_error(ai_err)
             await _db.ai_errors.update_one(
                 {"key": _singleton_key},
-                {"$set": {"key": _singleton_key, "message": result.get("error") or "AI failed", "timestamp": utc_now_iso(), "filename": filename}},
+                {"$set": {"key": _singleton_key, "message": ai_err, "timestamp": utc_now_iso(), "filename": filename}},
                 upsert=True,
             )
+            # Rate-limit / timeout: hard-fail the row so the user can retry,
+            # don't insert a document. Other AI errors: file to Inbox for
+            # manual review (existing behaviour).
+            if ai_code in (ErrorCode.AI_RATE_LIMIT, ErrorCode.AI_TIMEOUT):
+                await _db.upload_queue.update_one(
+                    {"id": qid},
+                    {"$set": {
+                        "status": "Error",
+                        "error": ERROR_MESSAGES[ai_code],
+                        "error_code": ai_code,
+                        "completed_at": utc_now_iso(),
+                    }},
+                )
+                return
             # File the document to 00 Inbox with no analysis
             analysis = {
                 "document_type": "Unclassified",
@@ -411,7 +540,7 @@ async def _process_one(item: dict):
                 "category_confidence": "Unsure",
                 "tax_year": "Unsure",
                 "tax_year_confidence": "Unsure",
-                "tax_year_reason": result.get("error", "AI failed"),
+                "tax_year_reason": ai_err,
                 "date_range_from": None, "date_range_to": None,
                 "counterparty": None,
                 "one_line_summary": "AI classification failed — please review",
@@ -445,6 +574,19 @@ async def _process_one(item: dict):
             "error": result.get("error"),
         }
 
+    # Stage 4.5 — extraction-failure flagging: AI was best-effort, but if we
+    # have no usable text, force accountant review and force Inbox routing,
+    # and downstream we'll skip auto-matching to missing evidence.
+    if extraction_failed:
+        analysis = dict(analysis)
+        analysis["accountant_review_required"] = True
+        prev_reason = analysis.get("accountant_review_reason") or ""
+        ext_reason = "Text extraction failed or limited text extracted."
+        analysis["accountant_review_reason"] = (
+            f"{prev_reason} | {ext_reason}".strip(" |") if prev_reason else ext_reason
+        )
+        analysis["category_confidence"] = "Unsure"
+
     # Step 6 — determine target folder
     cat = analysis.get("category") or "Other"
     cat_conf = analysis.get("category_confidence") or "Unsure"
@@ -459,6 +601,9 @@ async def _process_one(item: dict):
     canonical_filename = analysis.get("suggested_filename") or filename
     canonical_path = cat_dir / f"{sha[:12]}_{_safe_filename(canonical_filename)}"
     canonical_path.write_bytes(content)
+
+    # Checkpoint — before Drive upload
+    await _raise_if_cancelled(qid)
 
     # Step 8 — copy to Google Drive (best effort)
     drive_file_id = None
@@ -543,17 +688,22 @@ async def _process_one(item: dict):
         "user_notes": "",
         "drive_error": drive_error,
     }
+    # Checkpoint — before document insert (last cancel opportunity)
+    await _raise_if_cancelled(qid)
     await _db.documents.insert_one(doc)
 
     # ---- Stage 2: update missing-evidence tracker (non-blocking) ----
-    try:
-        from missing_evidence import check_and_update_missing_evidence
-        ai_for_match = dict(analysis or {})
-        ai_for_match["original_filename"] = filename
-        ai_for_match["headline_figures_json"] = analysis.get("headline_figures") or []
-        await check_and_update_missing_evidence(_db, doc_id, ai_for_match)
-    except Exception as e:
-        logger.warning(f"Missing-evidence update failed for {doc_id} (continuing): {e}")
+    # Skip auto-matching if we never had usable text to begin with — avoids
+    # mis-matching purely on category.
+    if not extraction_failed:
+        try:
+            from missing_evidence import check_and_update_missing_evidence
+            ai_for_match = dict(analysis or {})
+            ai_for_match["original_filename"] = filename
+            ai_for_match["headline_figures_json"] = analysis.get("headline_figures") or []
+            await check_and_update_missing_evidence(_db, doc_id, ai_for_match)
+        except Exception as e:
+            logger.warning(f"Missing-evidence update failed for {doc_id} (continuing): {e}")
 
     # cleanup staging
     try:

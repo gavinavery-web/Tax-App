@@ -49,6 +49,20 @@ Single private user (the owner). Single-user, no auth. Australian taxpayer with 
   - Reports page now lists 5 downloads (Evidence Register CSV, Missing Evidence CSV, Accountant Summary PDF, Accountant Summary TXT, Documents by Category CSV).
   - Inline "Export CSV" + "Accountant summary" buttons in the Evidence Register header.
   - Sidebar footer updated: "Stage 1 + 2 · Hybrid AI".
+- **Stage 4.5 — Hardening (Feb 25, 2026)**:
+  - **AI 60-second timeout** in `upload_pipeline.py`: `asyncio.wait_for(classify_document(...), timeout=AI_TIMEOUT_SECONDS)`. Timeout → row status `Error`, `error_code=AI_TIMEOUT`, staging file preserved so `Retry` works.
+  - **True cooperative cancellation** with checkpoints before extraction, after extraction, before AI, after AI, before Drive upload, and before document insert. `_raise_if_cancelled()` raises a `_Cancelled` sentinel caught by the worker → row goes to `Cancelled`/`CANCELLED`, no document inserted, no Drive upload, no missing-evidence touch.
+  - **`DELETE /api/uploads/queue/{qid}`** now also cancels active rows (Uploading/Reading/Classifying) by setting `cancel_requested=true`. Response includes `mode: "immediate" | "cooperative" | "noop"`.
+  - **`DELETE /api/uploads/queue`** now cancels Queued+Duplicate? immediately AND flags active rows cooperatively. Response includes `{immediate, cooperative}` counts.
+  - **Crash handler sanitised**: raw exception text is logged but never stored on the queue row. User-facing `error` is always `ERROR_MESSAGES[UNEXPECTED_ERROR]`.
+  - **Duplicate rows** now carry `error_code=FILE_DUPLICATE` + `error=ERROR_MESSAGES[FILE_DUPLICATE]` so the frontend renders a consistent hint.
+  - **`ai_classifier._call_model`** now returns a 5-tuple `(parsed, in, out, raw, error_str)` propagating timeout / 429 / quota / overloaded / generic strings. `classify_document` forwards combined error text so `classify_ai_error()` can map to `AI_TIMEOUT`/`AI_RATE_LIMIT`/`AI_FAILED`.
+  - **Extraction-failure handling**: if `extract_text` fails or yields <10 chars, the document is still filed (to Inbox), `accountant_review_required` is forced, reason includes "Text extraction failed or limited text extracted.", and `category_confidence` is downgraded to `Unsure`. Missing-evidence auto-match is **skipped** for these documents to avoid mis-matching purely on category.
+  - **Dashboard missing count** now counts only `Outstanding ∪ Possible Match ∪ Accountant Review` (was `status != "Found"`, a Stage-1 legacy).
+  - **Accountant PDF outstanding section** uses the same `OPEN_STATUSES` filter.
+  - **Manual override protection**: PATCH `/api/missing-evidence/{id}` with any status other than `Outstanding` sets `status_source="user"`, `status_updated_by="user"`, `status_updated_at`. `check_and_update_missing_evidence` now skips any row with `status_source="user"`. PATCH to `Outstanding` clears the manual flag (explicit re-evaluation signal).
+  - **Pre-existing `POST /api/missing-evidence` bug fixed**: was returning `_id: ObjectId` causing 500 JSON-encode error.
+  - **Tests**: `backend/tests/test_stage_4_5.py` (19 cases) + Stage 1 suite refreshed for new statuses. Full suite: **40 passed / 0 failed / 1 skipped** (the skip is benign — only triggered if there's no Filed row in the queue at the moment of the test).
 - **Stage 4 — Production hardening (Feb 25, 2026)**:
   - New `/app/backend/error_codes.py` — `ErrorCode` enum + `ERROR_MESSAGES` map + `classify_ai_error()` / `classify_drive_error()` helpers; queue rows now carry a stable `error_code` field.
   - Hard 100 MB file cap (`MAX_UPLOAD_BYTES`); oversize and 0-byte uploads land directly in `Error` state with `FILE_TOO_LARGE` / `FILE_EMPTY` codes — no worker time wasted.

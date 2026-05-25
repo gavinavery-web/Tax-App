@@ -398,6 +398,13 @@ async def check_and_update_missing_evidence(db, document_id: str, ai_result: dic
     checked = 0
 
     for item in items:
+        # Stage 4.5: never auto-overwrite a row a human has touched (unless
+        # they reset to Outstanding, which is the explicit re-evaluation
+        # signal). Auto-matched rows have status_source="system" and remain
+        # eligible.
+        manual = (item.get("status_source") == "user")
+        if manual:
+            continue
         if item.get("status") in ("Received", "Not applicable", "Accountant Review"):
             # Never auto-downgrade or overwrite explicit user states.
             continue
@@ -438,6 +445,8 @@ async def check_and_update_missing_evidence(db, document_id: str, ai_result: dic
                     "matched_document_name": document_filename,
                     "match_confidence": confidence,
                     "match_reason": "; ".join(reason_parts),
+                    "status_source": "system",
+                    "status_updated_at": utc_now_iso(),
                     "updated_at": utc_now_iso(),
                 }},
             )
@@ -459,6 +468,8 @@ async def check_and_update_missing_evidence(db, document_id: str, ai_result: dic
                     "matched_document_name": document_filename,
                     "match_confidence": "Unsure",
                     "match_reason": "; ".join(reasons),
+                    "status_source": "system",
+                    "status_updated_at": utc_now_iso(),
                     "updated_at": utc_now_iso(),
                 }},
             )
