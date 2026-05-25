@@ -225,22 +225,45 @@ async def clear_finished():
 
 @router.get("/ai/stats")
 async def ai_stats():
-    docs = await _db.documents.count_documents({"ai_model_used": {"$ne": None}})
-    cur = _db.documents.aggregate([
-        {"$match": {"ai_cost_usd": {"$ne": None}}},
-        {"$group": {"_id": None, "cost": {"$sum": "$ai_cost_usd"},
-                    "tokens_in": {"$sum": "$ai_input_tokens"},
-                    "tokens_out": {"$sum": "$ai_output_tokens"}}},
-    ])
-    agg = await cur.to_list(1)
+    """Hybrid AI usage stats — counts Gemini-only vs Claude-escalated runs and
+    sums per-model cost. Cached responses contribute zero cost."""
+    total_docs = await _db.documents.count_documents({"ai_model_used": {"$ne": None}})
+    claude_escalations = await _db.documents.count_documents({"escalated_to_claude": True})
+    gemini_only = await _db.documents.count_documents({"escalated_to_claude": False, "ai_model_used": {"$ne": None}})
+
+    pipeline = [
+        {"$match": {"ai_model_used": {"$ne": None}}},
+        {"$group": {
+            "_id": None,
+            "total_cost": {"$sum": {"$ifNull": ["$total_ai_cost_usd", "$ai_cost_usd"]}},
+            "gemini_cost": {"$sum": {"$ifNull": ["$gemini_cost_usd", 0]}},
+            "claude_cost": {"$sum": {"$ifNull": ["$claude_cost_usd", 0]}},
+            "tokens_in": {"$sum": "$ai_input_tokens"},
+            "tokens_out": {"$sum": "$ai_output_tokens"},
+        }},
+    ]
+    agg = await _db.documents.aggregate(pipeline).to_list(1)
+    sums = agg[0] if agg else {}
     last_err = await _db.ai_errors.find_one({"key": _singleton_key}, {"_id": 0})
+
     return {
+        # camelCase fields used by the Settings UI:
+        "totalDocs": total_docs,
+        "geminiCalls": total_docs,
+        "claudeEscalations": claude_escalations,
+        "geminiOnly": gemini_only,
+        "totalCost": round((sums.get("total_cost") or 0.0), 4),
+        "geminiCost": round((sums.get("gemini_cost") or 0.0), 4),
+        "claudeCost": round((sums.get("claude_cost") or 0.0), 4),
+        # legacy snake_case kept for backwards compatibility
         "status": "Active" if os.environ.get("EMERGENT_LLM_KEY") else "Disabled",
-        "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929"),
-        "documents_processed": docs,
-        "total_cost_usd": round((agg[0]["cost"] if agg else 0.0) or 0.0, 4),
-        "total_tokens_in": (agg[0]["tokens_in"] if agg else 0) or 0,
-        "total_tokens_out": (agg[0]["tokens_out"] if agg else 0) or 0,
+        "mode": "Hybrid (Gemini → Claude escalation)",
+        "primary_model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+        "escalation_model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929"),
+        "documents_processed": total_docs,
+        "total_cost_usd": round((sums.get("total_cost") or 0.0), 4),
+        "total_tokens_in": (sums.get("tokens_in") or 0),
+        "total_tokens_out": (sums.get("tokens_out") or 0),
         "last_error": last_err,
     }
 
@@ -337,6 +360,13 @@ async def _process_one(item: dict):
             "tokens_out": result.get("tokens_out", 0),
             "cost_usd": result.get("cost_usd", 0.0),
             "model": result.get("model"),
+            "primary_model_used": result.get("primary_model_used"),
+            "final_model_used": result.get("final_model_used"),
+            "escalated_to_claude": bool(result.get("escalated_to_claude")),
+            "escalation_reason": result.get("escalation_reason"),
+            "gemini_cost_usd": result.get("gemini_cost_usd", 0.0),
+            "claude_cost_usd": result.get("claude_cost_usd", 0.0),
+            "total_ai_cost_usd": result.get("total_ai_cost_usd", result.get("cost_usd", 0.0)),
             "error": result.get("error"),
         }
 
@@ -427,6 +457,13 @@ async def _process_one(item: dict):
         "ai_cost_usd": ai_meta.get("cost_usd", 0.0),
         "ai_call_timestamp": utc_now_iso(),
         "ai_response_cached": bool(ai_meta.get("cached")),
+        "primary_model_used": ai_meta.get("primary_model_used"),
+        "final_model_used": ai_meta.get("final_model_used"),
+        "escalated_to_claude": ai_meta.get("escalated_to_claude", False),
+        "escalation_reason": ai_meta.get("escalation_reason"),
+        "gemini_cost_usd": ai_meta.get("gemini_cost_usd", 0.0),
+        "claude_cost_usd": ai_meta.get("claude_cost_usd", 0.0),
+        "total_ai_cost_usd": ai_meta.get("total_ai_cost_usd", ai_meta.get("cost_usd", 0.0)),
         "user_confirmed": False,
         "user_notes": "",
         "drive_error": drive_error,

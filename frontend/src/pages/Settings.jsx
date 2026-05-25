@@ -226,14 +226,26 @@ export default function Settings() {
 
       <div className="bg-white border border-zinc-200 rounded-sm mt-4" data-testid="ai-status-card">
         <div className="px-4 py-2.5 border-b border-zinc-200">
-          <div className="text-sm font-semibold" style={{ fontFamily: "Chivo" }}>AI Classifier</div>
+          <div className="text-sm font-semibold" style={{ fontFamily: "Chivo" }}>AI Classifier (Hybrid)</div>
+          <div className="text-[11px] text-zinc-500 mono mt-0.5">Gemini Flash → Claude Sonnet escalation</div>
         </div>
         <div className="px-4 py-2">
-          <Row label="Status" value={aiStats?.status || "—"} testid="ai-status" />
-          <Row label="Model" value={aiStats?.model || "—"} testid="ai-model" />
-          <Row label="Documents processed" value={aiStats ? String(aiStats.documents_processed) : "—"} testid="ai-docs" />
-          <Row label="Total AI cost (USD)" value={aiStats ? `$${(aiStats.total_cost_usd || 0).toFixed(4)}` : "—"} testid="ai-cost" />
-          <Row label="Tokens in / out" value={aiStats ? `${aiStats.total_tokens_in} / ${aiStats.total_tokens_out}` : "—"} />
+          <Row label="Mode" value={aiStats?.mode || "Hybrid"} testid="ai-mode" />
+          <Row label="Primary model" value={aiStats?.primary_model || "—"} testid="ai-primary-model" />
+          <Row label="Escalation model" value={aiStats?.escalation_model || "—"} testid="ai-escalation-model" />
+          <Row label="Documents processed" value={aiStats ? String(aiStats.totalDocs ?? aiStats.documents_processed) : "—"} testid="ai-docs" />
+          <Row label="Gemini-only runs" value={aiStats ? String(aiStats.geminiOnly ?? 0) : "—"} testid="ai-gemini-only" />
+          <Row label="Claude escalations" value={aiStats ? String(aiStats.claudeEscalations ?? 0) : "—"} testid="ai-claude-escalations" />
+          <Row
+            label="Escalation rate"
+            value={aiStats && aiStats.totalDocs > 0
+              ? `${Math.round((aiStats.claudeEscalations / aiStats.totalDocs) * 100)}%`
+              : "—"}
+            testid="ai-escalation-rate"
+          />
+          <Row label="Gemini cost" value={aiStats ? `$${(aiStats.geminiCost || 0).toFixed(4)}` : "—"} testid="ai-gemini-cost" />
+          <Row label="Claude cost" value={aiStats ? `$${(aiStats.claudeCost || 0).toFixed(4)}` : "—"} testid="ai-claude-cost" />
+          <Row label="Total AI cost" value={aiStats ? `$${(aiStats.totalCost || 0).toFixed(4)}` : "—"} testid="ai-cost" />
           <Row label="Last AI error" value={aiStats?.last_error?.message || "None"} testid="ai-last-error" />
         </div>
       </div>
