@@ -31,6 +31,19 @@ Single private user (the owner). Single-user, no auth. Australian taxpayer with 
 - Auto-seed on backend startup: 30 missing items + 6 PAYG figures.
 - Backend tested 22/22 pytest cases (iteration_1.json).
 
+## What's been implemented (Stage 2 + Quick Fixes — Feb 2026)
+- Stage 2 Missing Evidence Tracker v2 with intelligent auto-matching.
+- Hybrid AI classifier (Gemini 1.5 Flash → Claude Sonnet 4.5) via Emergent Universal Key.
+- Bulk drag-and-drop uploads + live UploadQueue.
+- **Missing Evidence page UX (Feb 25, 2026)**:
+  - Per-row "Upload" button on every Outstanding / Possible Match / Accountant Review row + on the "Next best document" banner.
+  - Top "Have documents ready?" quick-upload bar with file & folder pickers.
+  - Italic "Need: …" canonical helper text under every item (sourced from seed `notes`, separated from user-editable `notes_user`).
+  - **Export CSV** link (→ `/api/reports/missing-evidence.csv`) in header, now including matched-document columns + user notes.
+  - **Ctrl/⌘+U** keyboard shortcut opens the quick-upload picker.
+  - Embedded `<UploadQueue>` shows live processing + AI auto-match status without leaving the page.
+  - Backend PATCH `/api/missing-evidence/{id}` now accepts `notes_user` so user notes never overwrite the canonical seed helper text.
+
 ## Backlog / deferred
 ### P1 — Stage 2 candidates
 - AI extraction of figures from uploaded PDFs/images (currently manual only — by Stage 1 design)

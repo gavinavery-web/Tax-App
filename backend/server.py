@@ -913,7 +913,7 @@ async def create_missing(payload: MissingItemCreate):
 
 @api_router.patch("/missing-evidence/{item_id}")
 async def update_missing(item_id: str, payload: dict):
-    allowed = {"status", "notes", "matched_document_id", "matched_document_name",
+    allowed = {"status", "notes", "notes_user", "matched_document_id", "matched_document_name",
                "match_confidence", "match_reason", "priority", "tax_year",
                "category", "item_description"}
     patch = {k: v for k, v in payload.items() if k in allowed and v is not None}
@@ -1045,9 +1045,11 @@ async def export_evidence_register():
 @api_router.get("/reports/missing-evidence.csv")
 async def export_missing():
     items = await db.missing_items.find({}, {"_id": 0}).to_list(5000)
-    headers = ["Item needed", "Category", "Tax year", "Priority", "Where to find it", "Why it matters", "Status", "Notes"]
+    headers = ["Item needed", "Category", "Tax year", "Priority", "Status",
+               "Matched document", "Match confidence", "Match reason", "Notes (seed)", "User notes"]
     rows = [[i.get("item_needed", ""), i.get("category", ""), i.get("tax_year", ""), i.get("priority", ""),
-             i.get("where_to_find", ""), i.get("why_matters", ""), i.get("status", ""), i.get("notes", "")] for i in items]
+             i.get("status", ""), i.get("matched_document_name", "") or "", i.get("match_confidence", "") or "",
+             i.get("match_reason", "") or "", i.get("notes", ""), i.get("notes_user", "") or ""] for i in items]
     return csv_response(headers, rows, "missing-evidence.csv")
 
 
