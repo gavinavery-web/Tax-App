@@ -13,7 +13,6 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "../components/ui/dialog";
-import { Select as PickSelect, SelectContent as PickContent, SelectItem as PickItem, SelectTrigger as PickTrigger, SelectValue as PickValue } from "../components/ui/select";
 
 const STATUS = ["Outstanding", "Possible Match", "Received", "Not applicable", "Accountant Review"];
 const PRIORITY_ORDER = ["Critical", "Important", "Later"];
@@ -396,17 +395,17 @@ function LinkExistingDialog({ open, onClose, item, onLinked }) {
           <div>Linking to: <span className="font-medium">{item?.item_description}</span></div>
           <div className="text-xs text-zinc-500 mt-1">{item?.category} · {item?.tax_year}</div>
         </div>
-        <PickSelect value={picked} onValueChange={setPicked}>
-          <PickTrigger data-testid="link-doc-select"><PickValue placeholder="Pick a document…" /></PickTrigger>
-          <PickContent className="max-h-80">
-            {docs.length === 0 && <PickItem value="__none__" disabled>No documents available</PickItem>}
+        <Select value={picked} onValueChange={setPicked}>
+          <SelectTrigger data-testid="link-doc-select"><SelectValue placeholder="Pick a document…" /></SelectTrigger>
+          <SelectContent className="max-h-80">
+            {docs.length === 0 && <SelectItem value="__none__" disabled>No documents available</SelectItem>}
             {docs.filter((d) => d.id).map((d) => (
-              <PickItem key={d.id} value={d.id}>
+              <SelectItem key={d.id} value={d.id}>
                 {d.name} <span className="text-zinc-500 text-xs">· {d.category} · {d.tax_year}</span>
-              </PickItem>
+              </SelectItem>
             ))}
-          </PickContent>
-        </PickSelect>
+          </SelectContent>
+        </Select>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
           <Button onClick={submit} disabled={busy || !picked} data-testid="link-confirm-btn">{busy ? "Linking…" : "Link document"}</Button>

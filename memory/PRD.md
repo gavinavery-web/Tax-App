@@ -144,6 +144,17 @@ Single private user (the owner). Single-user, no auth. Australian taxpayer with 
 - **Spec adaptations**: `_id` → `id` (codebase convention); `alert()`/`fetch()` → sonner `toast`/axios `api`; FY2026 removed (only FY2024 + FY2025 supported); shadcn components used in place of raw Tailwind.
 - Tested by testing_agent_v3_fork: **9/9 e2e flows pass, 0 bugs, 0 action items.**
 
+## Stage 7 Final One-Shot Patch — 6 critical MVP fixes (Feb 28, 2026)
+- **Fix 1 — Doc name links to Drive**: `EvidenceRegister.jsx` doc name in the table is now a Drive hyperlink when `drive_link` is present (data-testid `doc-name-link-{id}`); falls back to plain text otherwise.
+- **Fix 2 — Per-row delete (rubbish bin)**: new Actions column with trash icon → `window.confirm` → POST `/api/documents/{id}/delete` (soft delete, Drive copy preserved). Row disappears, doc appears in `/rubbish-bin`.
+- **Fix 3 — Next-Best card has 4 actions**: `Upload`, `Already uploaded` (opens shadcn Dialog with a document picker → PATCH status=Received + matched_document_id), `Skip for now` (PATCH status=Accountant Review — bumps out of Outstanding), `Not available` (confirm → PATCH status=Not applicable).
+- **Fix 4 — Bank statement upload guidance**: blue banner on `/bank-transactions` with a 3-step explainer and `Upload statements` CTA → `/register`.
+- **Fix 5 — Richer transaction rows**: raw bank line shown in a code-block when distinct from cleaned description, color-coded debit/credit amount, balance, confidence label.
+- **Fix 6 — Safe Reset / Start Fresh**: new endpoint `POST /api/admin/reset-test-data` + `Reset test data` section in Settings (typed `RESET` confirmation + optional properties checkbox). Soft-deletes all live documents, wipes `bank_transactions`, `tax_return_items`, `upload_queue`, `ai_response_cache`, `ai_errors`, and `figures` (preserving the seeded PAYG figures). Missing-evidence rows (excluding Not applicable) reset to `Outstanding`. Properties optionally re-seeded with Heathridge + Waggrakine defaults. Drive copies untouched.
+- **Spec adaptations**: `db.missing_evidence` → `db.missing_items` (real name); Stage-7 spec status strings (`"open"`, `"matched_by_upload"`, `"in_progress"`) → Stage 4.5 vocabulary (`"Outstanding"`, `"Received"`, `"Accountant Review"`); `datetime.now()` → ISO UTC strings; raw `fetch`/`alert`/`prompt` → axios `api` + sonner `toast` + shadcn `Dialog`; properties re-seeded after delete so other pages stay functional.
+- **Tested by testing_agent_v3_fork**: 6/6 fixes verified (5/6 e2e end-to-end including doc upload→delete→bin flow, 1/6 visual code review since DB is empty post-reset). One critical bug in `BankTransactions.jsx` (missing icon imports) was caught and fixed by the testing agent. Backend pytest still **96/96 passing**.
+- **Reset endpoint smoke-tested**: 38 docs moved to bin, 60 transactions wiped, 30 missing rows reset to Outstanding, properties preserved (when `reset_properties=false`).
+
 ## Backlog / deferred
 ### P1 — Stage 2 candidates
 - AI extraction of figures from uploaded PDFs/images (currently manual only — by Stage 1 design)
