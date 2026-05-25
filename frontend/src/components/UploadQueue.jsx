@@ -4,7 +4,8 @@ import FigureBadge from "./FigureBadge";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "./ui/dialog";
 import { toast } from "sonner";
-import { X, Trash2, RefreshCw, FileWarning } from "lucide-react";
+import { Trash2, RefreshCw, FileWarning, RotateCcw, AlertCircle, AlertTriangle, CloudOff, Clock } from "lucide-react";
+import { Link } from "react-router-dom";
 
 const STATUS_PALETTE = {
   Queued:      { bg: "#FAFAFA", fg: "#52525B", border: "#E4E4E7" },
@@ -23,17 +24,33 @@ const StatusPill = ({ value }) => {
   return <span className="pill" style={{ background: p.bg, color: p.fg, borderColor: p.border }}>{value}</span>;
 };
 
+// Map error_code → (icon, hint short label)
+const ERROR_HINT = {
+  FILE_TOO_LARGE:       { icon: AlertCircle,   label: "Too large" },
+  FILE_EMPTY:           { icon: AlertCircle,   label: "Empty file" },
+  FILE_DUPLICATE:       { icon: AlertTriangle, label: "Duplicate" },
+  AI_TIMEOUT:           { icon: Clock,         label: "AI timeout" },
+  AI_RATE_LIMIT:        { icon: Clock,         label: "Rate-limited" },
+  AI_FAILED:            { icon: AlertTriangle, label: "AI failed" },
+  DRIVE_DISCONNECTED:   { icon: CloudOff,      label: "Drive offline" },
+  DRIVE_QUOTA_EXCEEDED: { icon: CloudOff,      label: "Drive quota" },
+  DRIVE_UPLOAD_FAILED:  { icon: CloudOff,      label: "Drive failed" },
+  STAGING_MISSING:      { icon: AlertCircle,   label: "Staging lost" },
+  UNEXPECTED_ERROR:     { icon: AlertCircle,   label: "Crash" },
+};
+
 export default function UploadQueue({ onChanged }) {
   const [items, setItems] = useState([]);
   const [counts, setCounts] = useState({});
   const [dup, setDup] = useState(null);
+  // Track per-row "cooldown until" ms timestamp for AI_RATE_LIMIT retries.
+  const [cooldown, setCooldown] = useState({});
 
   const load = useCallback(async () => {
     try {
       const r = await api.get("/uploads/queue");
       setItems(r.data.items);
       setCounts(r.data.counts);
-      // surface first un-handled duplicate
       const firstDup = (r.data.items || []).find((it) => it.status === "Duplicate?");
       setDup((cur) => cur && cur.id === firstDup?.id ? cur : firstDup || null);
     } catch (e) { /* silent — poll keeps trying */ }
@@ -51,6 +68,13 @@ export default function UploadQueue({ onChanged }) {
     // eslint-disable-next-line
   }, [items.length, items.filter((i) => ["Filed", "Inbox"].includes(i.status)).length]);
 
+  // Tick once per second to refresh cooldown countdowns.
+  useEffect(() => {
+    if (!Object.keys(cooldown).length) return;
+    const t = setInterval(() => setCooldown((c) => ({ ...c })), 1000);
+    return () => clearInterval(t);
+  }, [cooldown]);
+
   const decide = async (qid, action) => {
     await api.post(`/uploads/queue/${qid}/decision`, { action });
     toast.success(`Duplicate: ${action}`);
@@ -61,8 +85,84 @@ export default function UploadQueue({ onChanged }) {
   const cancelAll = async () => { await api.delete(`/uploads/queue`); toast.success("Pending cancelled"); load(); };
   const clearDone = async () => { await api.delete(`/uploads/queue/finished/clear`); toast.success("Cleared finished"); load(); };
 
-  const visible = items.filter((it) => it.status !== "Cancelled" || true);
-  if (!visible.length) return null;
+  const retryOne = async (qid) => {
+    try {
+      await api.post(`/uploads/queue/${qid}/retry`);
+      toast.success("Re-queued");
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Retry failed — please re-upload this file");
+    }
+  };
+
+  const retryWithCooldown = (qid, seconds) => {
+    const until = Date.now() + seconds * 1000;
+    setCooldown((c) => ({ ...c, [qid]: until }));
+    toast.message(`Will retry in ${seconds}s — please wait`);
+    setTimeout(() => {
+      setCooldown((c) => { const { [qid]: _, ...rest } = c; return rest; });
+      retryOne(qid);
+    }, seconds * 1000);
+  };
+
+  if (!items.length) return null;
+
+  const renderActions = (it) => {
+    if (["Queued", "Duplicate?"].includes(it.status)) {
+      return (
+        <button onClick={() => cancelOne(it.id)} className="text-zinc-400 hover:text-red-700"
+                data-testid={`queue-cancel-${it.id}`} title="cancel">
+          <Trash2 className="w-3 h-3" />
+        </button>
+      );
+    }
+    if (it.status === "Error" || it.status === "Cancelled") {
+      const isRate = it.error_code === "AI_RATE_LIMIT";
+      const isDrive = it.error_code === "DRIVE_DISCONNECTED";
+      const inCooldown = cooldown[it.id] && cooldown[it.id] > Date.now();
+      const secondsLeft = inCooldown ? Math.ceil((cooldown[it.id] - Date.now()) / 1000) : 0;
+      return (
+        <div className="flex flex-col items-end gap-1">
+          {isDrive ? (
+            <Link to="/settings" className="text-blue-700 hover:underline text-[11px]"
+                  data-testid={`queue-reconnect-${it.id}`}>Reconnect Drive</Link>
+          ) : isRate ? (
+            <button
+              onClick={() => retryWithCooldown(it.id, 60)}
+              disabled={inCooldown}
+              className="text-blue-700 hover:underline text-[11px] disabled:text-zinc-400 disabled:no-underline"
+              data-testid={`queue-retry-${it.id}`}
+              title="AI was rate-limited — waits 60s then retries"
+            >
+              {inCooldown ? `Retry in ${secondsLeft}s` : "Retry (wait 60s)"}
+            </button>
+          ) : (
+            <button onClick={() => retryOne(it.id)} className="text-blue-700 hover:underline text-[11px]"
+                    data-testid={`queue-retry-${it.id}`} title="retry">
+              <RotateCcw className="w-3 h-3 inline mr-0.5" /> Retry
+            </button>
+          )}
+        </div>
+      );
+    }
+    return null;
+  };
+
+  const renderStatusCell = (it) => {
+    const hint = ERROR_HINT[it.error_code];
+    return (
+      <div className="flex items-center gap-1.5">
+        <StatusPill value={it.status} />
+        {hint && (
+          <span className="inline-flex items-center gap-0.5 text-[10px] text-zinc-500" title={it.error || ""}>
+            <hint.icon className="w-3 h-3" /> {hint.label}
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  const errorRows = items.filter((it) => it.error_code && it.status === "Error");
 
   return (
     <div className="bg-white border border-zinc-200 rounded-sm mb-3" data-testid="upload-queue">
@@ -81,24 +181,31 @@ export default function UploadQueue({ onChanged }) {
           <Button variant="outline" onClick={clearDone} className="rounded-sm h-7 px-2 text-xs">clear finished</Button>
         </div>
       </div>
+
+      {errorRows.length > 0 && (
+        <div className="px-3 py-2 bg-red-50 border-b border-red-200 text-[11px] text-red-800" data-testid="queue-error-banner">
+          <strong>{errorRows.length} file(s) need attention.</strong> Use the per-row action on the right to retry or reconnect.
+        </div>
+      )}
+
       <div className="max-h-72 overflow-y-auto">
         <table className="w-full dense-table text-xs">
           <thead>
             <tr><th>File</th><th>Status</th><th>Category</th><th>Confidence</th><th>Cost</th><th></th></tr>
           </thead>
           <tbody>
-            {visible.map((it) => (
+            {items.map((it) => (
               <tr key={it.id} data-testid={`queue-row-${it.id}`}>
                 <td className="font-medium truncate max-w-[280px]" title={it.filename}>{it.filename}</td>
-                <td><StatusPill value={it.status} /></td>
+                <td>{renderStatusCell(it)}</td>
                 <td className="text-zinc-600">{it.ai_category || (it.status === "Duplicate?" ? `dup of ${it.duplicate_meta?.name || ""}` : "—")}</td>
                 <td>{it.ai_confidence ? <FigureBadge value={it.ai_confidence} /> : <span className="text-zinc-400">—</span>}</td>
                 <td className="mono text-right">${(it.ai_cost_usd || 0).toFixed(3)}</td>
                 <td className="text-right">
-                  {["Queued", "Duplicate?"].includes(it.status) && (
-                    <button onClick={() => cancelOne(it.id)} className="text-zinc-400 hover:text-red-700" data-testid={`queue-cancel-${it.id}`}><Trash2 className="w-3 h-3" /></button>
+                  {renderActions(it)}
+                  {it.error && !ERROR_HINT[it.error_code] && (
+                    <span title={it.error} className="text-red-700 ml-1"><FileWarning className="w-3 h-3 inline" /></span>
                   )}
-                  {it.error && <span title={it.error} className="text-red-700 ml-1"><FileWarning className="w-3 h-3 inline" /></span>}
                 </td>
               </tr>
             ))}

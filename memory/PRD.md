@@ -49,6 +49,15 @@ Single private user (the owner). Single-user, no auth. Australian taxpayer with 
   - Reports page now lists 5 downloads (Evidence Register CSV, Missing Evidence CSV, Accountant Summary PDF, Accountant Summary TXT, Documents by Category CSV).
   - Inline "Export CSV" + "Accountant summary" buttons in the Evidence Register header.
   - Sidebar footer updated: "Stage 1 + 2 · Hybrid AI".
+- **Stage 4 — Production hardening (Feb 25, 2026)**:
+  - New `/app/backend/error_codes.py` — `ErrorCode` enum + `ERROR_MESSAGES` map + `classify_ai_error()` / `classify_drive_error()` helpers; queue rows now carry a stable `error_code` field.
+  - Hard 100 MB file cap (`MAX_UPLOAD_BYTES`); oversize and 0-byte uploads land directly in `Error` state with `FILE_TOO_LARGE` / `FILE_EMPTY` codes — no worker time wasted.
+  - Pipeline crash handler now sets `error_code=UNEXPECTED_ERROR`; staging-missing path sets `STAGING_MISSING`; successful rows surface non-fatal `AI_*` / `DRIVE_*` codes as informational hints.
+  - New `POST /api/uploads/queue/{qid}/retry` — re-queues `Error`/`Cancelled` rows (404 if missing, 409 if staging file gone, 400 if status wrong).
+  - New `POST /api/uploads/recover-stuck` — resets items stuck >10 min in `Uploading`/`Reading`/`Classifying` back to `Queued`; fired from `<Layout>` on app load.
+  - Existing endpoints kept: cancel-one, cancel-all, clear-finished, duplicate-decision.
+  - `UploadQueue.jsx` rewritten to render `error_code` → action mapping: **Retry** for transient errors, **Retry (wait 60s)** countdown for `AI_RATE_LIMIT`, **Reconnect Drive** link for `DRIVE_DISCONNECTED`, banner showing total error count.
+  - **Note**: the spec's wholesale `upload_pipeline.py` replacement was rejected — it contained stub Drive code (`drive_file_id = "..."`) and assumed an auth layer this single-user app doesn't have. Stage 4 hardening was integrated surgically into the existing working pipeline instead.
 
 ## Backlog / deferred
 ### P1 — Stage 2 candidates

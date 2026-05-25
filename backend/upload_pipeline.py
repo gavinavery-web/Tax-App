@@ -19,10 +19,14 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query
 
 from extraction import extract_text
 from ai_classifier import classify_document
+from error_codes import ErrorCode, ERROR_MESSAGES, classify_ai_error, classify_drive_error
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
+
+# Hard size cap (Stage 4). 100 MB.
+MAX_FILE_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(100 * 1024 * 1024)))
 
 # Lazy module-level refs filled in by server.py via init_pipeline()
 _db = None
@@ -110,12 +114,24 @@ async def bulk_upload(files: list[UploadFile] = File(...)):
     for f in files:
         content = await f.read()
         sha = sha256_bytes(content)
+        # Stage 4 — hard size cap; oversize files are queued in Error state
+        # with a stable error_code so the UI can show "Retry" on a smaller file.
+        oversize = len(content) > MAX_FILE_BYTES
+        empty = len(content) == 0
         # dedup check: existing document with same sha
-        existing = await _db.documents.find_one({"sha256": sha}, {"_id": 0, "id": 1, "name": 1, "created_at": 1, "category": 1})
+        existing = await _db.documents.find_one({"sha256": sha}, {"_id": 0, "id": 1, "name": 1, "created_at": 1, "category": 1}) if not (oversize or empty) else None
         # write content to a temp staging file
         staging = _app_storage_dir / f"_staging__{uuid.uuid4()}__{_safe_filename(f.filename or 'file')}"
         staging.write_bytes(content)
         qid = str(uuid.uuid4())
+        if oversize:
+            initial_status, err_code, err_msg = "Error", ErrorCode.FILE_TOO_LARGE, ERROR_MESSAGES[ErrorCode.FILE_TOO_LARGE]
+        elif empty:
+            initial_status, err_code, err_msg = "Error", ErrorCode.FILE_EMPTY, ERROR_MESSAGES[ErrorCode.FILE_EMPTY]
+        elif existing:
+            initial_status, err_code, err_msg = "Duplicate?", None, None
+        else:
+            initial_status, err_code, err_msg = "Queued", None, None
         await _db.upload_queue.insert_one({
             "id": qid,
             "filename": f.filename,
@@ -123,17 +139,18 @@ async def bulk_upload(files: list[UploadFile] = File(...)):
             "size_bytes": len(content),
             "sha256": sha,
             "staging_path": str(staging),
-            "status": "Duplicate?" if existing else "Queued",
+            "status": initial_status,
             "duplicate_of": existing.get("id") if existing else None,
             "duplicate_meta": existing or None,
             "result_document_id": None,
             "ai_category": None,
             "ai_confidence": None,
             "ai_cost_usd": 0.0,
-            "error": None,
+            "error": err_msg,
+            "error_code": err_code,
             "queued_at": utc_now_iso(),
             "started_at": None,
-            "completed_at": None,
+            "completed_at": utc_now_iso() if initial_status == "Error" else None,
         })
         queue_ids.append(qid)
         if existing:
@@ -223,6 +240,54 @@ async def clear_finished():
     return {"ok": True}
 
 
+# ---------- Stage 4: retry + recovery ---------------------------------------
+
+@router.post("/uploads/queue/{qid}/retry")
+async def retry_one(qid: str):
+    """Re-queue a failed or cancelled item. Only works if the staging file
+    still exists locally — otherwise the user must re-upload."""
+    item = await _db.upload_queue.find_one({"id": qid}, {"_id": 0})
+    if not item:
+        raise HTTPException(404, "queue item not found")
+    if item.get("status") not in ("Error", "Cancelled"):
+        raise HTTPException(400, f"cannot retry from status {item.get('status')}")
+    staging = Path(item.get("staging_path") or "")
+    if not staging.exists():
+        raise HTTPException(409, "staging file missing — please re-upload this file")
+    await _db.upload_queue.update_one(
+        {"id": qid},
+        {"$set": {
+            "status": "Queued",
+            "error": None,
+            "error_code": None,
+            "started_at": None,
+            "completed_at": None,
+        }},
+    )
+    asyncio.create_task(_run_worker())
+    return {"ok": True}
+
+
+@router.post("/uploads/recover-stuck")
+async def recover_stuck():
+    """Reset items stuck in an active state for >10 minutes back to Queued.
+    Called from the frontend on app load to recover from a crashed worker
+    (e.g. backend restart mid-pipeline)."""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    active = ["Uploading", "Reading", "Classifying"]
+    res = await _db.upload_queue.update_many(
+        {"status": {"$in": active}, "$or": [
+            {"started_at": {"$lt": cutoff}},
+            {"started_at": None},
+        ]},
+        {"$set": {"status": "Queued", "started_at": None}},
+    )
+    if res.modified_count:
+        asyncio.create_task(_run_worker())
+    return {"ok": True, "recovered": res.modified_count}
+
+
 @router.get("/ai/stats")
 async def ai_stats():
     """Hybrid AI usage stats — counts Gemini-only vs Claude-escalated runs and
@@ -286,7 +351,12 @@ async def _run_worker():
             logger.exception(f"Pipeline crash on {item.get('id')}")
             await _db.upload_queue.update_one(
                 {"id": item["id"]},
-                {"$set": {"status": "Error", "error": str(e)[:500], "completed_at": utc_now_iso()}},
+                {"$set": {
+                    "status": "Error",
+                    "error": str(e)[:500],
+                    "error_code": ErrorCode.UNEXPECTED_ERROR,
+                    "completed_at": utc_now_iso(),
+                }},
             )
 
 
@@ -295,7 +365,12 @@ async def _process_one(item: dict):
     sha = item["sha256"]
     staging = Path(item["staging_path"])
     if not staging.exists():
-        await _db.upload_queue.update_one({"id": qid}, {"$set": {"status": "Error", "error": "Staging file missing", "completed_at": utc_now_iso()}})
+        await _db.upload_queue.update_one({"id": qid}, {"$set": {
+            "status": "Error",
+            "error": ERROR_MESSAGES[ErrorCode.STAGING_MISSING],
+            "error_code": ErrorCode.STAGING_MISSING,
+            "completed_at": utc_now_iso(),
+        }})
         return
     content = staging.read_bytes()
     filename = item["filename"] or "file"
@@ -487,6 +562,15 @@ async def _process_one(item: dict):
         pass
 
     final_status = "Inbox" if target_folder == INBOX_FOLDER else "Filed"
+    # Surface Drive/AI sub-errors as informational codes even on a successful row.
+    info_code = None
+    info_msg = None
+    if drive_error:
+        info_code = classify_drive_error(drive_error)
+        info_msg = ERROR_MESSAGES[info_code]
+    elif ai_meta.get("error"):
+        info_code = classify_ai_error(ai_meta.get("error"))
+        info_msg = ERROR_MESSAGES[info_code]
     await _db.upload_queue.update_one(
         {"id": qid},
         {"$set": {
@@ -497,5 +581,7 @@ async def _process_one(item: dict):
             "ai_confidence": cat_conf,
             "ai_cost_usd": ai_meta.get("cost_usd", 0.0),
             "target_folder": target_folder,
+            "error_code": info_code,
+            "error": info_msg,
         }},
     )

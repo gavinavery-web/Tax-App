@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { LayoutDashboard, Table2, AlertTriangle, FileBarChart2, Settings as SettingsIcon, ShieldCheck } from "lucide-react";
+import { api } from "../lib/api";
 
 const links = [
   { to: "/", end: true, label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
@@ -11,6 +12,12 @@ const links = [
 ];
 
 export default function Layout() {
+  // Stage 4: on app load, recover any uploads stuck in active state (e.g.
+  // backend was restarted mid-batch). Fire-and-forget — safe to ignore failure.
+  useEffect(() => {
+    api.post("/uploads/recover-stuck").catch(() => {});
+  }, []);
+
   return (
     <div className="min-h-screen bg-[#F4F4F5] text-zinc-950 flex">
       <aside className="w-60 shrink-0 bg-white border-r border-zinc-200 flex flex-col" data-testid="app-sidebar">
