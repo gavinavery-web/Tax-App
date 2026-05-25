@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { StatusPill } from "../components/StatusPill";
-import { Cloud, CloudOff, AlertCircle, Banknote } from "lucide-react";
+import { Cloud, CloudOff, AlertCircle, Banknote, FileStack, ShieldCheck, AlertTriangle as AlertTri, Upload as UploadIcon } from "lucide-react";
 import { fmtAUD } from "../lib/constants";
 import { Link } from "react-router-dom";
 
@@ -9,15 +9,18 @@ export default function Dashboard() {
   const [data, setData] = useState(null);
   const [drive, setDrive] = useState(null);
   const [paygFigures, setPaygFigures] = useState([]);
+  const [stats, setStats] = useState(null);
 
   const load = async () => {
-    const [d, ds, pf] = await Promise.all([
+    const [d, ds, pf, st] = await Promise.all([
       api.get("/dashboard"),
       api.get("/drive/status"),
       api.get("/figures", { params: { } }),
+      api.get("/dashboard/stats"),
     ]);
     setData(d.data); setDrive(ds.data);
     setPaygFigures(pf.data.filter((f) => f.figure_type === "payg_income"));
+    setStats(st.data);
   };
 
   useEffect(() => { load(); }, []);
@@ -47,6 +50,54 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* Stage 5 — at-a-glance stat band */}
+      {stats && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5" data-testid="stats-band">
+          <div className="bg-white border border-zinc-200 border-l-2 border-l-zinc-950 rounded-sm p-3 flex items-start gap-3" data-testid="stat-total">
+            <FileStack className="w-5 h-5 text-zinc-700 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[11px] uppercase tracking-wider text-zinc-500">Total documents</div>
+              <div className="text-2xl font-bold mono leading-tight">{stats.total}</div>
+            </div>
+          </div>
+          <Link to="/register" className="bg-white border border-zinc-200 border-l-2 border-l-green-600 rounded-sm p-3 flex items-start gap-3 hover:bg-zinc-50 transition" data-testid="stat-classified">
+            <ShieldCheck className="w-5 h-5 text-green-700 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[11px] uppercase tracking-wider text-zinc-500">Classified &amp; filed</div>
+              <div className="text-2xl font-bold mono leading-tight">{stats.classified}</div>
+            </div>
+          </Link>
+          <Link to="/register?review=Yes" className="bg-white border border-zinc-200 border-l-2 border-l-amber-500 rounded-sm p-3 flex items-start gap-3 hover:bg-zinc-50 transition" data-testid="stat-needs-review">
+            <AlertTri className="w-5 h-5 text-amber-600 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[11px] uppercase tracking-wider text-zinc-500">Needs review</div>
+              <div className="text-2xl font-bold mono leading-tight">{stats.needs_review}</div>
+            </div>
+          </Link>
+          <Link to="/missing" className="bg-white border border-zinc-200 border-l-2 border-l-red-600 rounded-sm p-3 flex items-start gap-3 hover:bg-zinc-50 transition" data-testid="stat-missing-critical">
+            <AlertCircle className="w-5 h-5 text-red-700 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[11px] uppercase tracking-wider text-zinc-500">Critical missing</div>
+              <div className="text-2xl font-bold mono leading-tight">{stats.missing_critical}</div>
+              <div className="text-[11px] text-zinc-500 mt-0.5">{stats.missing_total} outstanding total</div>
+            </div>
+          </Link>
+        </div>
+      )}
+
+      {/* Empty state — surfaces only when nothing has been uploaded yet */}
+      {stats && stats.total === 0 && (
+        <div className="bg-white border border-dashed border-zinc-300 rounded-sm p-8 mb-5 text-center" data-testid="dashboard-empty-state">
+          <UploadIcon className="w-10 h-10 text-zinc-400 mx-auto mb-3" />
+          <div className="text-sm font-semibold mb-1" style={{ fontFamily: "Chivo" }}>No documents yet</div>
+          <div className="text-xs text-zinc-500 mb-3">Drag a folder onto the Evidence Register, or press{" "}
+            <kbd className="px-1.5 py-0.5 bg-zinc-100 border border-zinc-200 rounded text-[10px] mono">Ctrl/⌘+U</kbd>
+            {" "}to jump straight there.
+          </div>
+          <Link to="/register" className="inline-block px-4 py-1.5 bg-zinc-950 text-white text-xs rounded-sm hover:bg-zinc-800">Go to Evidence Register</Link>
+        </div>
+      )}
 
       {/* Tax year status row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-6">

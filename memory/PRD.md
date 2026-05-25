@@ -63,6 +63,13 @@ Single private user (the owner). Single-user, no auth. Australian taxpayer with 
   - **Manual override protection**: PATCH `/api/missing-evidence/{id}` with any status other than `Outstanding` sets `status_source="user"`, `status_updated_by="user"`, `status_updated_at`. `check_and_update_missing_evidence` now skips any row with `status_source="user"`. PATCH to `Outstanding` clears the manual flag (explicit re-evaluation signal).
   - **Pre-existing `POST /api/missing-evidence` bug fixed**: was returning `_id: ObjectId` causing 500 JSON-encode error.
   - **Tests**: `backend/tests/test_stage_4_5.py` (19 cases) + Stage 1 suite refreshed for new statuses. Full suite: **40 passed / 0 failed / 1 skipped** (the skip is benign — only triggered if there's no Filed row in the queue at the moment of the test).
+- **Stage 5 — Production polish (Feb 25, 2026)**:
+  - New `GET /api/dashboard/stats` — returns `total`, per-category counts, `classified`, `needs_review`, `missing_critical`, `missing_total`. Uses correct collection names (`documents`, `missing_items`) and Stage 4.5 `OPEN_STATUSES` filter.
+  - New stat band on the Dashboard (4 deep-link cards): Total / Classified & Filed / Needs Review (→ `/register?review=Yes`) / Critical Missing (→ `/missing-evidence`). Existing dense FY/PAYG/category layout preserved.
+  - Empty state on the Dashboard for fresh installs (total === 0) with `Ctrl/⌘+U` hint.
+  - Global keyboard shortcuts in `Layout.jsx`: `Ctrl/⌘+U` → /register, `Ctrl/⌘+M` → /missing-evidence, `Ctrl/⌘+Shift+D` → / (Shift avoids hijacking the browser bookmark binding). Input/textarea focus is respected.
+  - Sidebar shows `⌘U` / `⌘M` / `⌘⇧D` hint chips next to nav items.
+  - New `HelpTip` component (shadcn `Tooltip` wrapper) applied to the *Confidence* / *Review* / *AI $* column headers on the Evidence Register.
 - **Stage 4 — Production hardening (Feb 25, 2026)**:
   - New `/app/backend/error_codes.py` — `ErrorCode` enum + `ERROR_MESSAGES` map + `classify_ai_error()` / `classify_drive_error()` helpers; queue rows now carry a stable `error_code` field.
   - Hard 100 MB file cap (`MAX_UPLOAD_BYTES`); oversize and 0-byte uploads land directly in `Error` state with `FILE_TOO_LARGE` / `FILE_EMPTY` codes — no worker time wasted.

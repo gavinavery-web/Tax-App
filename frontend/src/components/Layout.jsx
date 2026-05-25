@@ -1,22 +1,42 @@
 import React, { useEffect } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { LayoutDashboard, Table2, AlertTriangle, FileBarChart2, Settings as SettingsIcon, ShieldCheck } from "lucide-react";
 import { api } from "../lib/api";
 
 const links = [
-  { to: "/", end: true, label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
-  { to: "/register", label: "Evidence Register", icon: Table2, testid: "nav-register" },
-  { to: "/missing-evidence", label: "Missing Evidence", icon: AlertTriangle, testid: "nav-missing" },
+  { to: "/", end: true, label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard", shortcut: "⌘⇧D" },
+  { to: "/register", label: "Evidence Register", icon: Table2, testid: "nav-register", shortcut: "⌘U" },
+  { to: "/missing-evidence", label: "Missing Evidence", icon: AlertTriangle, testid: "nav-missing", shortcut: "⌘M" },
   { to: "/reports", label: "Reports", icon: FileBarChart2, testid: "nav-reports" },
   { to: "/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings" },
 ];
 
 export default function Layout() {
+  const navigate = useNavigate();
+
   // Stage 4: on app load, recover any uploads stuck in active state (e.g.
   // backend was restarted mid-batch). Fire-and-forget — safe to ignore failure.
   useEffect(() => {
     api.post("/uploads/recover-stuck").catch(() => {});
   }, []);
+
+  // Stage 5 — global keyboard shortcuts. Ctrl/⌘ + U / M / D.
+  // Skip when the user is typing in an input/textarea/contenteditable so we
+  // don't hijack normal editing keystrokes.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const tag = (e.target?.tagName || "").toLowerCase();
+      if (["input", "textarea", "select"].includes(tag) || e.target?.isContentEditable) return;
+      const key = (e.key || "").toLowerCase();
+      if (key === "u") { e.preventDefault(); navigate("/register"); }
+      else if (key === "m") { e.preventDefault(); navigate("/missing-evidence"); }
+      // Avoid hijacking Ctrl+D (bookmark). Use Ctrl+Shift+D for Dashboard.
+      else if (key === "d" && e.shiftKey) { e.preventDefault(); navigate("/"); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navigate]);
 
   return (
     <div className="min-h-screen bg-[#F4F4F5] text-zinc-950 flex">
@@ -46,7 +66,8 @@ export default function Layout() {
               }
             >
               <l.icon className="w-4 h-4" strokeWidth={2} />
-              {l.label}
+              <span className="flex-1">{l.label}</span>
+              {l.shortcut && <kbd className="text-[9px] mono text-zinc-400 px-1 py-0.5 border border-zinc-200 rounded">{l.shortcut}</kbd>}
             </NavLink>
           ))}
         </nav>

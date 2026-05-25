@@ -993,6 +993,63 @@ async def dashboard():
     return {"cards": cards, "total_documents": len(all_docs)}
 
 
+@api_router.get("/dashboard/stats")
+async def dashboard_stats():
+    """Stage 5 — compact stat band for the dashboard top row.
+
+    Returns total + per-category doc counts, plus the "classified",
+    "needs_review", and "missing_critical" aggregates the UI surfaces as
+    headline numbers. Single-user app, no auth.
+    """
+    # Total documents
+    total = await db.documents.count_documents({})
+
+    # Per-category counts — uses the canonical folder names.
+    categories: dict[str, int] = {}
+    for cat in [
+        "00 Inbox", "01 ATO", "02 PAYG Income", "03 Airbnb",
+        "04 Waggrakine Rental", "05 Heathridge", "06 Revive",
+        "07 Bank Statements", "08 Salary Packaging Maxxia",
+        "09 Accountant Review", "10 Missing Evidence", "11 Final Accountant Pack",
+    ]:
+        categories[cat] = await db.documents.count_documents({"category": cat})
+
+    # Documents that were confidently filed (not Inbox, conf Confirmed/Likely).
+    classified = await db.documents.count_documents({
+        "category": {"$ne": "00 Inbox"},
+        "category_confidence": {"$in": ["Confirmed", "Likely"]},
+    })
+
+    # Anything the human needs to look at.
+    needs_review = await db.documents.count_documents({
+        "$or": [
+            {"category": "00 Inbox"},
+            {"category": "09 Accountant Review"},
+            {"accountant_review_required": True},
+            {"accountant_review": "Yes"},
+        ],
+    })
+
+    # Critical outstanding missing evidence (Stage 4.5 status vocabulary).
+    OPEN_STATUSES = ["Outstanding", "Possible Match", "Accountant Review"]
+    missing_critical = await db.missing_items.count_documents({
+        "status": {"$in": OPEN_STATUSES},
+        "priority": "Critical",
+    })
+    missing_total = await db.missing_items.count_documents({
+        "status": {"$in": OPEN_STATUSES},
+    })
+
+    return {
+        "total": total,
+        "categories": categories,
+        "classified": classified,
+        "needs_review": needs_review,
+        "missing_critical": missing_critical,
+        "missing_total": missing_total,
+    }
+
+
 # =================== Reference data ===================
 
 @api_router.get("/reference")

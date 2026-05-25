@@ -9,6 +9,7 @@ import { Label } from "../components/ui/label";
 import { StatusPill } from "../components/StatusPill";
 import FigureBadge from "../components/FigureBadge";
 import UploadQueue from "../components/UploadQueue";
+import { HelpTip } from "../components/HelpTip";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { fmtDate, fmtAUD } from "../lib/constants";
 import { TAX_YEAR_OPTIONS } from "../utils/taxYear";
@@ -319,9 +320,9 @@ export default function EvidenceRegister() {
               <th>Link</th>
               <th>Tax year</th>
               <th>Category</th>
-              <th>Confidence</th>
-              <th>Review</th>
-              <th>AI $</th>
+              <th>Confidence <HelpTip text="How sure the AI is about the category. Confirmed = matched explicit keywords. Likely = strong signal. Unsure = filed to 00 Inbox for manual review." /></th>
+              <th>Review <HelpTip text="Items the AI flagged for an accountant or you to look at — typically due to risky claims, missing context, or low text quality." /></th>
+              <th>AI $ <HelpTip text="Cost incurred by Gemini + Claude for this document. Cached re-uploads cost $0." /></th>
               <th>Status</th>
             </tr>
           </thead>
