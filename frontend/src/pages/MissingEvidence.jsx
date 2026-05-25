@@ -8,8 +8,12 @@ import UploadQueue from "../components/UploadQueue";
 import { toast } from "sonner";
 import {
   CheckCircle2, AlertOctagon, AlertTriangle, Inbox, ShieldCheck,
-  RotateCcw, Star, Upload, FolderUp, Files, Download,
+  RotateCcw, Star, Upload, FolderUp, Files, Download, SkipForward, Link2, Ban,
 } from "lucide-react";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "../components/ui/dialog";
+import { Select as PickSelect, SelectContent as PickContent, SelectItem as PickItem, SelectTrigger as PickTrigger, SelectValue as PickValue } from "../components/ui/select";
 
 const STATUS = ["Outstanding", "Possible Match", "Received", "Not applicable", "Accountant Review"];
 const PRIORITY_ORDER = ["Critical", "Important", "Later"];
@@ -278,19 +282,7 @@ export default function MissingEvidence() {
       <UploadQueue onChanged={load} />
 
       {next ? (
-        <div className="bg-zinc-950 text-white rounded-sm p-4 mb-5 flex items-start gap-3" data-testid="next-best-card">
-          <Star className="w-5 h-5 mt-0.5 text-amber-300" />
-          <div className="flex-1">
-            <div className="text-[11px] uppercase tracking-wider text-zinc-300">Next best document to find</div>
-            <div className="text-base font-semibold mt-0.5" style={{ fontFamily: "Chivo" }}>{next.item_description}</div>
-            <div className="text-xs text-zinc-300 mt-1">
-              {next.priority} · {next.category} · {next.tax_year}
-            </div>
-            {next.notes && <div className="text-xs text-zinc-300 mt-1 leading-relaxed">Need: {next.notes}</div>}
-          </div>
-          <RowUploadButton itemId={`next-${next.id}`} onUploaded={load} />
-          <Button onClick={() => updateStatus(next.id, "Not applicable")} variant="outline" className="rounded-sm bg-transparent text-white border-zinc-600 hover:bg-zinc-800 text-xs">Skip</Button>
-        </div>
+        <NextBestCard next={next} updateStatus={updateStatus} reload={load} />
       ) : (
         <div className="bg-green-50 border border-green-200 rounded-sm p-3 mb-5 text-sm text-green-900 flex items-center gap-2" data-testid="all-clear">
           <CheckCircle2 className="w-4 h-4" /> No outstanding items — checklist complete.
@@ -303,5 +295,123 @@ export default function MissingEvidence() {
       <Section title="Accountant Review" items={buckets["Accountant Review"]} icon={ShieldCheck} onChange={updateStatus} onNotes={updateNotes} onUploaded={load} allowUpload />
       <Section title="Not applicable" items={buckets["Not applicable"]} icon={Inbox} onChange={updateStatus} onNotes={updateNotes} />
     </div>
+  );
+}
+
+// ----------- Next Best Document card (Skip / Not Available / Already Uploaded) -----------
+// Three explicit actions that map onto the existing Stage 4.5 status vocabulary
+// so the missing-evidence pipeline + exports stay consistent:
+//   Skip for Now    → "Accountant Review"  (out of Outstanding, still visible)
+//   Not Available   → "Not applicable"      (permanently dismissed)
+//   Already Uploaded→ "Received"            (manually linked to a document)
+function NextBestCard({ next, updateStatus, reload }) {
+  const [linkOpen, setLinkOpen] = useState(false);
+  return (
+    <div className="bg-zinc-950 text-white rounded-sm p-4 mb-5 flex items-start gap-3 flex-wrap" data-testid="next-best-card">
+      <Star className="w-5 h-5 mt-0.5 text-amber-300 shrink-0" />
+      <div className="flex-1 min-w-[240px]">
+        <div className="text-[11px] uppercase tracking-wider text-zinc-300">Next best document to find</div>
+        <div className="text-base font-semibold mt-0.5" style={{ fontFamily: "Chivo" }}>{next.item_description}</div>
+        <div className="text-xs text-zinc-300 mt-1">
+          {next.priority} · {next.category} · {next.tax_year}
+        </div>
+        {next.notes && <div className="text-xs text-zinc-300 mt-1 leading-relaxed">Need: {next.notes}</div>}
+      </div>
+      <div className="flex flex-wrap gap-2 shrink-0">
+        <RowUploadButton itemId={`next-${next.id}`} onUploaded={reload} />
+        <Button
+          onClick={() => setLinkOpen(true)}
+          variant="outline"
+          className="rounded-sm bg-transparent text-white border-zinc-600 hover:bg-zinc-800 text-xs gap-1.5"
+          data-testid="next-link-existing-btn"
+        ><Link2 className="w-3.5 h-3.5" /> Already uploaded</Button>
+        <Button
+          onClick={() => updateStatus(next.id, "Accountant Review")}
+          variant="outline"
+          className="rounded-sm bg-transparent text-white border-zinc-600 hover:bg-zinc-800 text-xs gap-1.5"
+          title="Move out of Outstanding and review later"
+          data-testid="next-skip-btn"
+        ><SkipForward className="w-3.5 h-3.5" /> Skip for now</Button>
+        <Button
+          onClick={() => {
+            if (window.confirm(`Mark "${next.item_description}" as not applicable? It will be permanently dismissed (you can re-open it later).`)) {
+              updateStatus(next.id, "Not applicable");
+            }
+          }}
+          variant="outline"
+          className="rounded-sm bg-transparent text-white border-zinc-600 hover:bg-zinc-800 text-xs gap-1.5"
+          data-testid="next-not-applicable-btn"
+        ><Ban className="w-3.5 h-3.5" /> Not available</Button>
+      </div>
+      <LinkExistingDialog open={linkOpen} onClose={() => setLinkOpen(false)} item={next} onLinked={reload} />
+    </div>
+  );
+}
+
+function LinkExistingDialog({ open, onClose, item, onLinked }) {
+  const [docs, setDocs] = useState([]);
+  const [picked, setPicked] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    api.get("/documents").then((r) => {
+      // Prefer docs in same category/year first
+      const all = r.data || [];
+      const score = (d) => (d.category === item.category ? 2 : 0) + (d.tax_year === item.tax_year ? 1 : 0);
+      setDocs([...all].sort((a, b) => score(b) - score(a)));
+    }).catch(() => setDocs([]));
+    setPicked("");
+  }, [open, item]);
+
+  const submit = async () => {
+    if (!picked) { toast.error("Pick a document to link"); return; }
+    const chosen = docs.find((d) => d.id === picked);
+    setBusy(true);
+    try {
+      await api.patch(`/missing-evidence/${item.id}`, {
+        status: "Received",
+        matched_document_id: picked,
+        matched_document_name: chosen ? (chosen.name || chosen.original_filename) : picked,
+        match_confidence: "Confirmed",
+        match_reason: "Manually linked by user",
+      });
+      toast.success("Linked");
+      onClose();
+      onLinked && onLinked();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed to link");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent data-testid="link-existing-dialog">
+        <DialogHeader>
+          <DialogTitle>Link existing document</DialogTitle>
+        </DialogHeader>
+        <div className="text-sm text-zinc-700 mb-3">
+          <div>Linking to: <span className="font-medium">{item?.item_description}</span></div>
+          <div className="text-xs text-zinc-500 mt-1">{item?.category} · {item?.tax_year}</div>
+        </div>
+        <PickSelect value={picked} onValueChange={setPicked}>
+          <PickTrigger data-testid="link-doc-select"><PickValue placeholder="Pick a document…" /></PickTrigger>
+          <PickContent className="max-h-80">
+            {docs.length === 0 && <PickItem value="__none__" disabled>No documents available</PickItem>}
+            {docs.filter((d) => d.id).map((d) => (
+              <PickItem key={d.id} value={d.id}>
+                {d.name} <span className="text-zinc-500 text-xs">· {d.category} · {d.tax_year}</span>
+              </PickItem>
+            ))}
+          </PickContent>
+        </PickSelect>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button onClick={submit} disabled={busy || !picked} data-testid="link-confirm-btn">{busy ? "Linking…" : "Link document"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -2030,7 +2030,6 @@ async def list_rubbish_bin():
 
 
 # =================== Stage 7 Phase 3 — Properties ===================
-
 @api_router.get("/properties")
 async def list_properties_endpoint():
     return await _prop.get_properties(db)
@@ -2086,6 +2085,104 @@ async def delete_property_period_endpoint(property_id: str, period_id: str):
     if not ok:
         raise HTTPException(404, "Property or period not found")
     return {"success": True}
+
+
+# =================== Stage 7 Phase 3 — Admin: Safe Reset ===================
+# Soft-resets the database for a "start fresh" workflow before going live with
+# real tax evidence. Documents are moved to the rubbish bin (restorable);
+# generated tables (bank_transactions, tax_return_items) are wiped; missing-
+# evidence rows are reset to the canonical Stage 4.5 vocabulary; properties
+# are optionally re-seeded so the app remains functional.
+
+@api_router.post("/admin/reset-test-data")
+async def reset_test_data(payload: dict | None = None):
+    payload = payload or {}
+    reset_properties = bool(payload.get("reset_properties", False))
+    now = utc_now_iso()
+    try:
+        # 1. Soft-delete every live document (Drive copy + local file untouched)
+        docs_before = await db.documents.count_documents({"is_deleted": {"$ne": True}})
+        docs_res = await db.documents.update_many(
+            {"is_deleted": {"$ne": True}},
+            {"$set": {
+                "is_deleted": True,
+                "deleted_at": now,
+                "deleted_reason": "Reset test data before real tax workflow",
+                "deleted_by_user": "admin_reset",
+                "updated_at": now,
+            }},
+        )
+
+        # 2. Wipe generated data (bank transactions + tax return items + manual
+        # figures). These are entirely re-derivable on next upload, so we hard-
+        # delete to keep the schema clean.
+        trans_res = await db.bank_transactions.delete_many({})
+        items_res = await db.tax_return_items.delete_many({})
+        figs_res = await db.figures.delete_many({"figure_type": {"$ne": "payg_income"}})
+
+        # 3. Reset missing-evidence rows: clear satisfaction links and put every
+        # non-N/A row back to Outstanding. We DO NOT touch "Not applicable" rows
+        # because those represent explicit user decisions worth preserving.
+        me_res = await db.missing_items.update_many(
+            {"status": {"$ne": "Not applicable"}},
+            {"$set": {
+                "status": "Outstanding",
+                "status_source": "system",
+                "status_updated_by": "admin_reset",
+                "status_updated_at": now,
+                "satisfied_by_document_id": None,
+                "satisfied_at": None,
+                "satisfied_method": None,
+                "matched_document_id": None,
+                "matched_document_name": None,
+                "match_confidence": None,
+                "match_reason": None,
+            }},
+        )
+
+        # 4. Clear the upload queue (Filed/Error/Cancelled rows from testing).
+        queue_res = await db.upload_queue.delete_many({})
+
+        # 5. AI cache + error log — safe to clear; they're observability data only.
+        await db.ai_response_cache.delete_many({})
+        await db.ai_errors.delete_many({})
+
+        # 6. Optionally reset properties. Re-seed defaults so the Properties
+        # page + tax classifier keep working.
+        props_deleted = 0
+        if reset_properties:
+            res = await db.properties.delete_many({})
+            props_deleted = res.deleted_count
+            await db.properties.insert_many([
+                {"id": "prop-heathridge", "property_name": "Heathridge",
+                 "address": "9 Flotilla Drive, Heathridge WA 6008",
+                 "use_periods": [], "created_at": now, "updated_at": now},
+                {"id": "prop-waggrakine", "property_name": "Waggrakine",
+                 "address": "Waggrakine, WA",
+                 "use_periods": [], "created_at": now, "updated_at": now},
+            ])
+
+        logger.info(
+            f"admin reset: {docs_res.modified_count} docs soft-deleted, "
+            f"{trans_res.deleted_count} transactions wiped, "
+            f"{items_res.deleted_count} tax items wiped, "
+            f"{me_res.modified_count} missing rows reset"
+        )
+        return {
+            "success": True,
+            "documents_moved_to_bin": docs_res.modified_count,
+            "documents_before": docs_before,
+            "bank_transactions_deleted": trans_res.deleted_count,
+            "tax_return_items_deleted": items_res.deleted_count,
+            "manual_figures_deleted": figs_res.deleted_count,
+            "missing_items_reset": me_res.modified_count,
+            "upload_queue_cleared": queue_res.deleted_count,
+            "properties_reseeded": props_deleted if reset_properties else 0,
+            "message": "Reset complete. Documents moved to Rubbish Bin (restorable). Drive copies preserved.",
+        }
+    except Exception as e:
+        logger.exception("admin reset failed")
+        raise HTTPException(500, f"Reset failed: {e}")
 
 
 app.include_router(api_router)

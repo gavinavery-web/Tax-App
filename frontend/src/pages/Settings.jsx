@@ -249,6 +249,97 @@ export default function Settings() {
           <Row label="Last AI error" value={aiStats?.last_error?.message || "None"} testid="ai-last-error" />
         </div>
       </div>
+
+      <ResetTestData />
+    </div>
+  );
+}
+
+// ----------- Reset Test Data (admin / "start fresh") -----------
+// Soft-deletes all documents and wipes generated tables so the user can begin
+// the real tax workflow with a clean slate. Requires typing RESET to confirm.
+function ResetTestData() {
+  const [open, setOpen] = useState(false);
+  const [confirm, setConfirm] = useState("");
+  const [resetProps, setResetProps] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    if (confirm.trim() !== "RESET") { toast.error("Type RESET exactly to confirm"); return; }
+    setBusy(true);
+    try {
+      const r = await api.post("/admin/reset-test-data", { reset_properties: resetProps });
+      const d = r.data || {};
+      toast.success(
+        `Reset complete: ${d.documents_moved_to_bin || 0} docs → Rubbish Bin · ` +
+        `${d.bank_transactions_deleted || 0} transactions cleared · ` +
+        `${d.tax_return_items_deleted || 0} tax items cleared`
+      );
+      setOpen(false);
+      setConfirm("");
+      setResetProps(false);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Reset failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bg-white border border-zinc-200 rounded-sm mt-4" data-testid="reset-card">
+      <div className="px-4 py-2.5 border-b border-zinc-200">
+        <div className="text-sm font-semibold" style={{ fontFamily: "Chivo" }}>Reset test data</div>
+        <div className="text-[11px] text-zinc-500 mt-0.5">One-time wipe before the real tax workflow. Drive copies untouched.</div>
+      </div>
+      <div className="px-4 py-3 text-sm text-zinc-700">
+        {!open ? (
+          <div>
+            <div className="text-xs leading-relaxed mb-3">
+              Moves <strong>all documents</strong> to the Rubbish Bin (restorable), and wipes
+              generated tables: <span className="mono">bank_transactions</span>, <span className="mono">tax_return_items</span>,
+              the upload queue, and AI cache. Missing-evidence items return to <span className="mono">Outstanding</span>.
+              Google Drive files are preserved.
+            </div>
+            <Button variant="outline" className="border-amber-300 text-amber-900 hover:bg-amber-50" onClick={() => setOpen(true)} data-testid="reset-open-btn">
+              Reset test data…
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3" data-testid="reset-confirm-panel">
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-sm text-xs text-amber-900 leading-relaxed">
+              This soft-deletes documents and wipes generated data. Drive files are preserved and documents can be restored from the Rubbish Bin. Type <span className="mono font-semibold">RESET</span> below to confirm.
+            </div>
+            <label className="flex items-start gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={resetProps}
+                onChange={(e) => setResetProps(e.target.checked)}
+                className="mt-0.5"
+                data-testid="reset-properties-checkbox"
+              />
+              <div>
+                <div className="font-medium text-zinc-800">Also reset properties to defaults</div>
+                <div className="text-zinc-500">Wipes Heathridge + Waggrakine use-periods and re-seeds the defaults. Leave unchecked to keep your property setup.</div>
+              </div>
+            </label>
+            <input
+              type="text"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              placeholder="Type RESET to confirm"
+              className="w-full px-3 py-2 border border-zinc-300 rounded-sm mono text-sm focus:border-red-400 focus:ring-1 focus:ring-red-200 outline-none"
+              data-testid="reset-confirm-input"
+              autoFocus
+            />
+            <div className="flex gap-2 justify-end">
+              <Button variant="ghost" onClick={() => { setOpen(false); setConfirm(""); setResetProps(false); }} disabled={busy}>Cancel</Button>
+              <Button onClick={run} disabled={busy || confirm.trim() !== "RESET"} className="bg-red-600 hover:bg-red-700 text-white" data-testid="reset-run-btn">
+                {busy ? "Resetting…" : "Confirm reset"}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

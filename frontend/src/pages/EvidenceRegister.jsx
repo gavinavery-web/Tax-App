@@ -330,13 +330,27 @@ export default function EvidenceRegister() {
               <th>Review <HelpTip text="Items the AI flagged for an accountant or you to look at — typically due to risky claims, missing context, or low text quality." /></th>
               <th>AI $ <HelpTip text="Cost incurred by Gemini + Claude for this document. Cached re-uploads cost $0." /></th>
               <th>Status</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {filtered.map((d) => (
               <tr key={d.id} onClick={() => setEditId(d.id)} className="cursor-pointer" data-testid={`row-${d.id}`}>
                 <td className="mono text-xs text-zinc-600 whitespace-nowrap">{fmtDate(d.created_at)}</td>
-                <td className="font-medium max-w-[280px] truncate" title={d.one_line_summary || d.name}>{d.name}</td>
+                <td className="font-medium max-w-[280px] truncate" title={d.one_line_summary || d.name} onClick={(e) => d.drive_link && e.stopPropagation()}>
+                  {d.drive_link ? (
+                    <a
+                      href={d.drive_link}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-blue-700 hover:underline"
+                      title="Open source file in Google Drive"
+                      data-testid={`doc-name-link-${d.id}`}
+                    >{d.name}</a>
+                  ) : (
+                    <span data-testid={`doc-name-${d.id}`}>{d.name}</span>
+                  )}
+                </td>
                 <td className="mono text-xs text-zinc-600">{d.drive_folder_name || "—"}</td>
                 <td onClick={(e) => e.stopPropagation()}>
                   {d.drive_link ? (
@@ -351,9 +365,28 @@ export default function EvidenceRegister() {
                 <td className="text-xs">{d.accountant_review === "Yes" ? <span className="text-red-700 font-semibold">Review</span> : d.accountant_review}</td>
                 <td className="mono text-right text-xs">${(d.ai_cost_usd || 0).toFixed(3)}{d.ai_response_cached && <span className="text-zinc-400"> c</span>}</td>
                 <td><StatusPill value={d.status} /></td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  <button
+                    onClick={async () => {
+                      if (!window.confirm(`Move "${d.name}" to Rubbish Bin?\n\nDrive copy is preserved. You can restore from the Rubbish Bin tab.`)) return;
+                      try {
+                        await api.post(`/documents/${d.id}/delete`, { reason: "Moved from Evidence Register" });
+                        toast.success("Moved to Rubbish Bin");
+                        load();
+                      } catch (err) {
+                        toast.error(err.response?.data?.detail || "Delete failed");
+                      }
+                    }}
+                    className="text-zinc-400 hover:text-red-600"
+                    title="Move to Rubbish Bin"
+                    data-testid={`doc-delete-${d.id}`}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><td colSpan={10} className="text-center text-zinc-500 py-10 text-sm">No documents yet. Drag a folder onto the dropzone above.</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={11} className="text-center text-zinc-500 py-10 text-sm">No documents yet. Drag a folder onto the dropzone above.</td></tr>}
           </tbody>
         </table>
       </div>

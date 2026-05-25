@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { Info, Upload } from "lucide-react";
 import { api } from "../lib/api";
 import { fmtAUD } from "../lib/constants";
 import { toast } from "sonner";
@@ -64,6 +66,21 @@ export default function BankTransactions() {
         </div>
       </div>
 
+      <div className="mb-5 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-start gap-3" data-testid="bank-upload-guide">
+        <Info className="w-5 h-5 text-blue-700 mt-0.5 shrink-0" />
+        <div className="flex-1 text-sm text-zinc-800">
+          <div className="font-semibold text-blue-900 mb-1">How to add bank statements</div>
+          <ol className="list-decimal ml-5 space-y-0.5 text-xs leading-relaxed">
+            <li>Upload your bank statement (CSV or PDF) via the <strong>Evidence Register</strong>.</li>
+            <li>Pick category <strong>Bank Statement</strong>. The app auto-detects the format and extracts each row.</li>
+            <li>The extracted transactions appear here. Confirmed/Likely ones get an <strong>Add to return</strong> button.</li>
+          </ol>
+        </div>
+        <Link to="/register" className="shrink-0">
+          <Button size="sm" className="gap-1.5" data-testid="goto-upload-btn"><Upload className="w-3.5 h-3.5" /> Upload statements</Button>
+        </Link>
+      </div>
+
       <div className="mb-4 p-3 bg-white border border-zinc-200 rounded-lg flex items-center gap-3" data-testid="bank-transactions-filters">
         <Filter label="Status" value={status} onChange={setStatus} options={STATUS_OPTIONS} testid="filter-status" />
         <Filter
@@ -108,7 +125,13 @@ function Filter({ label, value, onChange, options, testid }) {
 }
 
 function TransactionRow({ t, onUse }) {
-  const date = t.transaction_date ? new Date(t.transaction_date).toLocaleDateString("en-AU") : "—";
+  const date = t.transaction_date ? new Date(t.transaction_date).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "—";
+  const amountStr = fmtAUD((t.amount_cents || 0) / 100);
+  const isDebit = (t.debit_credit || "").toLowerCase() === "debit";
+  const amountColor = isDebit ? "text-red-700" : "text-emerald-700";
+  const amountSign = isDebit ? "-" : "+";
+  const hasRawDistinct = t.description_raw && t.description_cleaned && t.description_raw !== t.description_cleaned;
+
   return (
     <div className="p-3 bg-white border border-zinc-200 rounded-lg" data-testid={`bank-txn-${t.id}`}>
       <div className="flex items-start justify-between gap-3">
@@ -123,14 +146,31 @@ function TransactionRow({ t, onUse }) {
             {t.review_required && <Tag tone="amber">Review</Tag>}
           </div>
           <div className="font-medium text-zinc-900 text-sm">{t.description_cleaned || t.description_raw}</div>
-          <div className="text-xs text-zinc-500 mt-0.5">
-            {t.category_suggested && <span>Suggested: {t.category_suggested}</span>}
-            {t.source_filename && <span className="ml-2">· From: {t.source_filename}</span>}
+          {hasRawDistinct && (
+            <div className="mt-1.5 p-1.5 bg-zinc-50 border-l-2 border-zinc-300 rounded-sm">
+              <div className="text-[10px] uppercase tracking-wide text-zinc-500 mono">Raw bank line</div>
+              <div className="text-xs text-zinc-700 mono break-all">{t.description_raw}</div>
+            </div>
+          )}
+          {t.review_required && t.review_reason && (
+            <div className="mt-1.5 p-1.5 bg-amber-50 border-l-2 border-amber-400 rounded-sm text-xs text-amber-900">
+              <span className="font-semibold">Review: </span>{t.review_reason}
+            </div>
+          )}
+          <div className="text-xs text-zinc-500 mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            {t.category_suggested && <span><span className="font-medium text-zinc-700">Category:</span> {t.category_suggested}</span>}
+            {t.tax_section_suggested && <span>· <span className="font-medium text-zinc-700">Tax:</span> {t.tax_section_suggested}</span>}
+            {t.confidence && <span>· <span className={t.confidence === "Confirmed" ? "text-emerald-700 font-medium" : t.confidence === "Likely" ? "text-blue-700 font-medium" : "text-zinc-600"}>{t.confidence}</span></span>}
+            {t.classification_method && <span>· <span className="text-zinc-600">{t.classification_method === "rules" ? "rules (no AI cost)" : t.classification_method}</span></span>}
+            {t.source_filename && <span className="truncate">· From: {t.source_filename}</span>}
           </div>
         </div>
         <div className="text-right shrink-0">
-          <div className="text-lg font-semibold text-zinc-900 mono">{fmtAUD((t.amount_cents || 0) / 100)}</div>
+          <div className={`text-lg font-semibold mono ${amountColor}`}>{amountSign}{amountStr}</div>
           <div className="text-xs mono text-zinc-500">{t.debit_credit || "—"}</div>
+          {t.balance_cents !== null && t.balance_cents !== undefined && (
+            <div className="text-[10px] mono text-zinc-400 mt-0.5">bal {fmtAUD(t.balance_cents / 100)}</div>
+          )}
           {t.evidence_status === "candidate" && !t.used_in_return && (t.confidence === "Confirmed" || t.confidence === "Likely") && (
             <button
               onClick={onUse}

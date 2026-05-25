@@ -1,0 +1,55 @@
+{
+  "summary": "Stage 7 Final One-Shot Patch (6 fixes) frontend e2e verification against live backend at REACT_APP_BACKEND_URL. 5 of 6 fixes verified end-to-end. 1 CRITICAL runtime bug found in BankTransactions.jsx (missing Info/Upload icon imports + Link import) — FIXED by testing agent and re-verified. Test flow: uploaded a TEST_playwright_doc.txt via POST /api/uploads/bulk, the AI auto-processed it and Drive-linked it (drive_link present). Verified doc-name-link-{id} renders as an <a target='_blank' href=drive.google.com>. Verified doc-delete-{id} → window.confirm → POST /api/documents/{id}/delete → live list went 1→0, rubbish-bin received the doc. Missing Evidence: next-best-card shows 4 buttons (Upload + Already uploaded + Skip for now + Not available). Skip → PATCH status=Accountant Review verified (item airbnb-income-fy2024 moved, new next item airbnb-income-fy2025 appeared). Already uploaded → link-existing-dialog + link-doc-select + link-confirm-btn all rendered. Not available → window.confirm → PATCH status=Not applicable verified end-to-end. Settings reset-card: open-btn reveals reset-confirm-panel with reset-properties-checkbox, reset-confirm-input, reset-run-btn. Run button correctly disabled until input === 'RESET' (verified by typing 'RESET' → enabled, then 'nope' → disabled). DID NOT CLICK CONFIRM RESET per instructions. Bank Transactions (after fix): bank-upload-guide banner + goto-upload-btn render and CTA navigates to /register; bank-txn-{id} row rendering verified by code review (no bank txns in DB post-reset, so row testid not e2e verifiable). Regression smoke: Dashboard, Tax Years, Properties, Rubbish Bin, Reports all load without errors.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "BankTransactions.jsx",
+        "issue": "FIXED by testing agent. Page threw ReferenceError: Info is not defined on mount. The new bank-upload-guide banner uses <Info>, <Upload> from lucide-react and <Link> from react-router-dom but none were imported. Page was completely broken (Uncaught runtime errors overlay shown). Added imports: `import { Link } from 'react-router-dom'` and `import { Info, Upload } from 'lucide-react'`. Re-verified: page now renders, banner + CTA work, CTA navigates to /register.",
+        "selector": "[data-testid='bank-upload-guide']",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Missing Evidence — LinkExistingDialog & EditRow dialog",
+        "issues": [
+          "Radix Dialog accessibility warning: 'Missing Description or aria-describedby={undefined} for DialogContent'. Consider adding <DialogDescription> for screen-reader users."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_3.json"
+  ],
+  "action_items": [
+    "(Already fixed by testing agent) Verify the BankTransactions.jsx import fix is acceptable; otherwise just confirm.",
+    "Optional polish: add <DialogDescription> to LinkExistingDialog to silence Radix a11y warning.",
+    "Bank-txn-{id} row visual rendering (raw bank line code block, balance, debit/credit color, confidence label) was code-reviewed only — no live bank txns in DB to e2e verify. Suggest uploading a sample CSV bank statement to do a final visual pass."
+  ],
+  "critical_code_review_comments": [
+    "BankTransactions.jsx ships with missing icon imports in the new bank-upload-guide banner — a basic smoke check on the page before commit would have caught this. Add a CI guard (eslint-plugin-react/no-undef + import/no-unresolved) to prevent regressions.",
+    "MissingEvidence.jsx imports both `Select…` and `Select as PickSelect…` from the same module — redundant aliasing; one import set is sufficient.",
+    "EvidenceRegister.jsx delete button uses window.confirm — fine for an internal single-user app but consider AlertDialog for parity with the rest of the UI.",
+    "BankTransactions.jsx TransactionRow renders raw bank line conditionally on `description_raw !== description_cleaned` — correct behavior; balance, debit/credit color (red-700/emerald-700), and confidence label are present in TransactionRow lines 134–180.",
+    "Settings ResetTestData component correctly disables the run button until input === 'RESET' (line 336). Good defensive UX.",
+    "All new data-testids requested in the patch are present in the source: doc-name-link-{id}, doc-name-{id}, doc-delete-{id}, next-skip-btn, next-not-applicable-btn, next-link-existing-btn, link-existing-dialog, link-doc-select, link-confirm-btn, bank-upload-guide, goto-upload-btn, bank-txn-{id}, reset-card, reset-open-btn, reset-confirm-panel, reset-properties-checkbox, reset-confirm-input, reset-run-btn."
+  ],
+  "updated_files": [
+    "/app/frontend/src/pages/BankTransactions.jsx (added missing imports: Link from react-router-dom, Info + Upload from lucide-react)"
+  ],
+  "success_rate": {
+    "backend": "n/a (frontend-only request)",
+    "frontend": "6/6 fixes verified (5/6 e2e, 1/6 via code review + fixed runtime bug)"
+  },
+  "test_credentials": "n/a — app has no auth",
+  "seed_data_creation": "Uploaded 1 doc via POST /api/uploads/bulk ('TEST_playwright_doc.txt') — was then deleted via the new delete button (moved to Rubbish Bin), demonstrating the full doc-name-link + doc-delete flow. 2 missing-evidence items (airbnb-income-fy2024, airbnb-income-fy2025) were status-changed to Accountant Review and Not applicable respectively as part of testing the next-best-card actions — these can be reset via Settings → Reset test data, or manually by clicking the row's 'Reset' button.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All 6 patch fixes verified. CRITICAL: BankTransactions.jsx was completely broken pre-fix due to missing Info/Upload/Link imports — testing agent fixed it. If main agent re-edits BankTransactions.jsx, ensure these 3 imports stay. The TEST_playwright_doc.txt is in the Rubbish Bin and the 2 missing-evidence items (airbnb-income-fy2024 → Accountant Review, airbnb-income-fy2025 → Not applicable) are in non-Outstanding states — user should run Settings → Reset test data before real evidence work, OR manually reset those 2 items via the row buttons.",
+  "rca_of_the_issue": "BankTransactions.jsx ReferenceError: The patch added a new bank-upload-guide banner JSX block that uses <Info>, <Upload>, and <Link> elements but the corresponding `import` statements were not added to the top of the file. Reproduction: navigate to /bank-transactions → react-dev-overlay shows 'Info is not defined' at BankTransactions component, entire page fails to mount. Mitigation: added `import { Link } from 'react-router-dom'` and `import { Info, Upload } from 'lucide-react'` to the top of /app/frontend/src/pages/BankTransactions.jsx. Re-verified post-fix: page mounts, banner renders, CTA navigates to /register correctly."
+}
