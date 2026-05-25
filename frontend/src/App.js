@@ -17,6 +17,7 @@ function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/register" element={<EvidenceRegister />} />
+            <Route path="/missing-evidence" element={<MissingEvidence />} />
             <Route path="/missing" element={<MissingEvidence />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/settings" element={<Settings />} />

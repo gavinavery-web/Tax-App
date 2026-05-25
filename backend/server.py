@@ -881,21 +881,50 @@ async def list_missing(priority: Optional[str] = None, status: Optional[str] = N
         q["priority"] = priority
     if status:
         q["status"] = status
-    cursor = db.missing_items.find(q, {"_id": 0}).sort("created_at", 1)
+    cursor = db.missing_items.find(q, {"_id": 0}).sort([("priority", 1), ("created_at", 1)])
     return await cursor.to_list(2000)
+
+
+@api_router.get("/missing-evidence/next")
+async def next_missing():
+    item = await me.get_next_best_document(db)
+    return {"item": item}
+
+
+@api_router.post("/missing-evidence/seed")
+async def seed_missing_v2():
+    return await me.seed_missing_evidence(db)
 
 
 @api_router.post("/missing-evidence")
 async def create_missing(payload: MissingItemCreate):
     item = MissingItem(**payload.model_dump())
-    await db.missing_items.insert_one(item.model_dump())
-    return item
+    d = item.model_dump()
+    d["item_description"] = d.get("item_needed", "")
+    d["status"] = d.get("status") or "Outstanding"
+    d["matched_document_id"] = None
+    d["matched_document_name"] = None
+    d["match_confidence"] = None
+    d["match_reason"] = None
+    d["updated_at"] = me.utc_now_iso()
+    await db.missing_items.insert_one(d)
+    return d
 
 
 @api_router.patch("/missing-evidence/{item_id}")
-async def update_missing(item_id: str, payload: MissingItemUpdate):
-    update = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
-    res = await db.missing_items.update_one({"id": item_id}, {"$set": update})
+async def update_missing(item_id: str, payload: dict):
+    allowed = {"status", "notes", "matched_document_id", "matched_document_name",
+               "match_confidence", "match_reason", "priority", "tax_year",
+               "category", "item_description"}
+    patch = {k: v for k, v in payload.items() if k in allowed and v is not None}
+    if "status" in patch and patch["status"] not in me.ALLOWED_STATUS:
+        raise HTTPException(400, f"status must be one of {me.ALLOWED_STATUS}")
+    if "match_confidence" in patch and patch["match_confidence"] not in me.ALLOWED_MATCH_CONFIDENCE:
+        raise HTTPException(400, f"match_confidence must be one of {me.ALLOWED_MATCH_CONFIDENCE}")
+    patch["updated_at"] = me.utc_now_iso()
+    if "item_description" in patch:
+        patch["item_needed"] = patch["item_description"]
+    res = await db.missing_items.update_one({"id": item_id}, {"$set": patch})
     if res.matched_count == 0:
         raise HTTPException(404, "Item not found")
     return await db.missing_items.find_one({"id": item_id}, {"_id": 0})
@@ -1194,6 +1223,17 @@ init_pipeline(
 )
 app.include_router(pipeline_router)
 
+# Stage 2 — Missing Evidence Tracker
+import missing_evidence as me
+
+@app.on_event("startup")
+async def _seed_missing_v2():
+    # Seed/refresh canonical list on every startup (idempotent)
+    try:
+        await me.seed_missing_evidence(db)
+    except Exception as e:
+        logger.warning(f"Missing evidence seed failed at startup: {e}")
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -1205,9 +1245,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    # Auto-seed on first run
-    if await db.missing_items.count_documents({}) == 0:
-        await db.missing_items.insert_many([MissingItem(**i).model_dump() for i in MISSING_PRELOAD])
+    # Stage 1 PAYG preload remains (FY income figures).
     if await db.figures.count_documents({"figure_type": "payg_income"}) == 0:
         await db.figures.insert_many([
             Figure(
@@ -1220,6 +1258,7 @@ async def startup():
             ).model_dump()
             for i in PAYG_PRELOAD
         ])
+    # Stage 2 missing-evidence seed runs in its own startup handler below.
 
 
 @app.on_event("shutdown")

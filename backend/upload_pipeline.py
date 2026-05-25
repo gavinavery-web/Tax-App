@@ -470,6 +470,16 @@ async def _process_one(item: dict):
     }
     await _db.documents.insert_one(doc)
 
+    # ---- Stage 2: update missing-evidence tracker (non-blocking) ----
+    try:
+        from missing_evidence import check_and_update_missing_evidence
+        ai_for_match = dict(analysis or {})
+        ai_for_match["original_filename"] = filename
+        ai_for_match["headline_figures_json"] = analysis.get("headline_figures") or []
+        await check_and_update_missing_evidence(_db, doc_id, ai_for_match)
+    except Exception as e:
+        logger.warning(f"Missing-evidence update failed for {doc_id} (continuing): {e}")
+
     # cleanup staging
     try:
         staging.unlink(missing_ok=True)

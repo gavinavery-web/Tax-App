@@ -5,7 +5,7 @@ import { LayoutDashboard, Table2, AlertTriangle, FileBarChart2, Settings as Sett
 const links = [
   { to: "/", end: true, label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
   { to: "/register", label: "Evidence Register", icon: Table2, testid: "nav-register" },
-  { to: "/missing", label: "Missing Evidence", icon: AlertTriangle, testid: "nav-missing" },
+  { to: "/missing-evidence", label: "Missing Evidence", icon: AlertTriangle, testid: "nav-missing" },
   { to: "/reports", label: "Reports", icon: FileBarChart2, testid: "nav-reports" },
   { to: "/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings" },
 ];
