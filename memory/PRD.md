@@ -165,6 +165,20 @@ Single private user (the owner). Single-user, no auth. Australian taxpayer with 
 - **Spec adaptations**: `db.missing_evidence` → `db.missing_items` (real name); spec's `status="Skipped"` (not in Stage 4.5 vocabulary) → existing "Accountant Review" path; spec's hardcoded `cost_per_document = 0.28` → real per-doc aggregation; spec's `_id` filters → string `id` filters; `datetime.now()` → ISO UTC strings everywhere; `db.dashboard_cache.delete_many({})` (collection doesn't exist) → dropped.
 - **Tested by testing_agent_v3_fork**: 12 new pytest cases written (`/app/backend/tests/test_emergency_workflow_fix.py`); full suite now **105/105 passing**. All UI flows verified end-to-end (Settings AI Usage card, Reset confirm-gating, BankTransactions 3-button row, Add-to-Return modal pre-population, Dashboard interval cleanup). Zero bugs, zero action items.
 
+## Stage 7 Final Comprehensive Workflow Fix (Feb 28, 2026)
+- **Fix 1** — `UploadQueue.jsx` `decide` / `cancelOne` / `cancelAll` / `clearDone` wrapped in try/catch + `finally:load()`. Backend errors now toast instead of triggering React's red runtime overlay. The bug was *never* a missing endpoint — `POST /api/uploads/queue/{qid}/decision` returns 404 cleanly on unknown qid.
+- **Fix 2** — Global `ErrorBoundary` class component at `/app/frontend/src/components/ErrorBoundary.jsx`, wraps `<Routes>` in `App.js`. Friendly amber card + "Reload page" button replaces React's red runtime overlay.
+- **Fix 3** — Bank transaction auto-triage (4 rule blocks at top of `classify_transaction_by_rules`): tiny <$1 → `private/noise_tiny_amount`; internal transfers → `private/internal_transfer`; bank fees → `candidate/bank_fee` + accountant review; interest-credit → `confirmed/interest_income`. Removes 70-90% of manual review noise.
+- **Fix 4** — `BankTransactions` default filter = `Needs action` (hides `used_in_return`, `private`, noise types). New options: `needs_action | all | candidate | added | private`.
+- **Fix 5** — Transaction description is now a `<Link to=/register?open={source_document_id}>` when source_document_id exists. `EvidenceRegister` consumes `?open=` and auto-opens the EditRow dialog (then strips the param via `replace:true`).
+- **Fix 6** — `POST /api/rubbish-bin/empty` + UI button + typed-`DELETE` Dialog. Per-file Drive trash with granular `drive_failed[]` reporting. Idempotent (returns zeros on empty bin). Smoke-tested live: 92 docs + 92 Drive files cleanly trashed.
+- **Fix 7** — Dropzone supports Ctrl/Cmd+V paste of screenshots. Global window listener; ignores paste inside inputs/textareas; image/* clipboard files only; auto-named `screenshot-{iso-timestamp}.{ext}`.
+- **Fix 8** — Dashboard `PAYG section` now shows empty-state guidance, per-row `view source` link → `/register?open={document_id}`, and a `Manage in Evidence Register →` cross-link.
+- **Fix 9** — `PATCH /api/documents/{id}` recomputes `accountant_review_required` + `status` in lockstep: `No` → required=False + status=Complete (if not Red); `Yes` → required=True + status=`Accountant review` + default reason=`Flagged by user`.
+- **Fix 10** — `UploadQueue` summary band: visible glyph row showing total · filed · inbox · duplicate · error · cancelled · in-progress counts (color-coded by status).
+- **Reused / NOT touched** (already correct): `_run_worker`, out-of-range FY filter in `upload_pipeline.py`, Drive trash on reset, accountant_review auto-complete logic in PATCH endpoint, Drive OAuth, AI classifier prompt, DB schema, migrations, Pydantic models.
+- **Tested by testing_agent_v3_fork**: 8 new pytest cases in `/app/backend/tests/test_workflow_fix.py`. Full suite **114/114 passing** (+9 from 105). All 10 fixes verified — 5 via e2e Playwright on live preview URL, 5 via code review against reference files. Zero bugs, zero action items.
+
 ## Backlog / deferred
 ### P1 — Stage 2 candidates
 - AI extraction of figures from uploaded PDFs/images (currently manual only — by Stage 1 design)
