@@ -259,10 +259,83 @@ def classify_transaction_by_rules(transaction: Dict, property_periods: List[Dict
     `ai_cost_usd=0.0`.
     """
     description_lower = (transaction.get("description_cleaned") or "").lower()
+    amount_cents = int(transaction.get("amount_cents") or 0)
+    debit_credit = (transaction.get("debit_credit") or "").lower()
     try:
         transaction_date = datetime.fromisoformat(transaction["transaction_date"])
     except (KeyError, ValueError):
         transaction_date = None
+
+    # 0a. Auto-triage: tiny amounts (<$1) — never material. Rounding fees,
+    # interest pennies, etc. Skip all manual review.
+    if 0 < amount_cents < 100:
+        transaction.update({
+            "merchant_detected": None,
+            "category_suggested": "noise_tiny_amount",
+            "tax_section_suggested": None,
+            "classification_method": "rules",
+            "confidence": "Confirmed",
+            "evidence_status": "private",
+            "review_required": False,
+            "accountant_review_required": False,
+            "review_reason": "Below $1 materiality threshold — auto-ignored",
+            "ai_cost_usd": 0.0,
+        })
+        return transaction
+
+    # 0b. Internal account transfers — common patterns. Not tax events.
+    _INTERNAL_PATTERNS = (
+        "transfer to ", "transfer from ", "internal transfer",
+        "tfr to ", "tfr from ", "deposit transfer",
+        "online transfer", "savings transfer",
+    )
+    if any(p in description_lower for p in _INTERNAL_PATTERNS):
+        transaction.update({
+            "merchant_detected": None,
+            "category_suggested": "internal_transfer",
+            "tax_section_suggested": None,
+            "classification_method": "rules",
+            "confidence": "Confirmed",
+            "evidence_status": "private",
+            "review_required": False,
+            "accountant_review_required": False,
+            "review_reason": "Internal account transfer — not a tax event",
+            "ai_cost_usd": 0.0,
+        })
+        return transaction
+
+    # 0c. Bank fees — flag for accountant (only claimable if business account).
+    _BANK_FEE_PATTERNS = ("account fee", "monthly fee", "atm fee", "overseas atm", "withdrawal fee")
+    if any(p in description_lower for p in _BANK_FEE_PATTERNS):
+        transaction.update({
+            "merchant_detected": None,
+            "category_suggested": "bank_fee",
+            "tax_section_suggested": None,
+            "classification_method": "rules",
+            "confidence": "Likely",
+            "evidence_status": "candidate",
+            "review_required": True,
+            "accountant_review_required": True,
+            "review_reason": "Bank fee — only claimable if a business account",
+            "ai_cost_usd": 0.0,
+        })
+        return transaction
+
+    # 0d. Obvious interest income — credit with 'interest' in description.
+    if debit_credit == "credit" and "interest" in description_lower and amount_cents > 0:
+        transaction.update({
+            "merchant_detected": None,
+            "category_suggested": "interest_income",
+            "tax_section_suggested": "interest",
+            "classification_method": "rules",
+            "confidence": "Confirmed",
+            "evidence_status": "candidate",
+            "review_required": False,
+            "accountant_review_required": False,
+            "review_reason": None,
+            "ai_cost_usd": 0.0,
+        })
+        return transaction
 
     # 1. Private spending — never tax-relevant.
     if any(p in description_lower for p in PRIVATE_PATTERNS):

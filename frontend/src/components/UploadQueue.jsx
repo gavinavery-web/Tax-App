@@ -82,14 +82,32 @@ export default function UploadQueue({ onChanged }) {
   }, [cooldown]);
 
   const decide = async (qid, action) => {
-    await api.post(`/uploads/queue/${qid}/decision`, { action });
-    toast.success(`Duplicate: ${action}`);
-    setDup(null);
-    load();
+    try {
+      await api.post(`/uploads/queue/${qid}/decision`, { action });
+      toast.success(`Duplicate: ${action}`);
+    } catch (e) {
+      const msg = e?.response?.data?.detail || e?.message || "Action failed";
+      toast.error(`Duplicate ${action} failed: ${msg}`);
+    } finally {
+      setDup(null);
+      load();
+    }
   };
-  const cancelOne = async (qid) => { await api.delete(`/uploads/queue/${qid}`); load(); };
-  const cancelAll = async () => { await api.delete(`/uploads/queue`); toast.success("Pending cancelled"); load(); };
-  const clearDone = async () => { await api.delete(`/uploads/queue/finished/clear`); toast.success("Cleared finished"); load(); };
+  const cancelOne = async (qid) => {
+    try { await api.delete(`/uploads/queue/${qid}`); }
+    catch (e) { toast.error(e?.response?.data?.detail || "Could not cancel"); }
+    finally { load(); }
+  };
+  const cancelAll = async () => {
+    try { await api.delete(`/uploads/queue`); toast.success("Pending cancelled"); }
+    catch (e) { toast.error(e?.response?.data?.detail || "Could not cancel all"); }
+    finally { load(); }
+  };
+  const clearDone = async () => {
+    try { await api.delete(`/uploads/queue/finished/clear`); toast.success("Cleared finished"); }
+    catch (e) { toast.error(e?.response?.data?.detail || "Could not clear finished"); }
+    finally { load(); }
+  };
 
   const retryOne = async (qid) => {
     try {
@@ -193,6 +211,20 @@ export default function UploadQueue({ onChanged }) {
           <strong>{errorRows.length} file(s) need attention.</strong> Use the per-row action on the right to retry or reconnect.
         </div>
       )}
+
+      {/* Fix 10: Import summary band — at-a-glance breakdown of the batch */}
+      <div className="px-3 py-2 bg-zinc-50 border-b border-zinc-200 text-[11px] flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="upload-summary">
+        <span className="font-semibold text-zinc-700">Summary:</span>
+        <span><b className="mono">{items.length}</b> total</span>
+        {(counts.Filed || 0) > 0 && <span className="text-emerald-700">✓ <b className="mono">{counts.Filed}</b> filed</span>}
+        {(counts.Inbox || 0) > 0 && <span className="text-amber-700">⌂ <b className="mono">{counts.Inbox}</b> inbox</span>}
+        {(counts["Duplicate?"] || 0) > 0 && <span className="text-blue-700">⊜ <b className="mono">{counts["Duplicate?"]}</b> duplicate</span>}
+        {(counts.Error || 0) > 0 && <span className="text-red-700">✕ <b className="mono">{counts.Error}</b> error</span>}
+        {(counts.Cancelled || 0) > 0 && <span className="text-zinc-500">⊘ <b className="mono">{counts.Cancelled}</b> cancelled</span>}
+        {((counts.Queued || 0) + (counts.Uploading || 0) + (counts.Reading || 0) + (counts.Classifying || 0)) > 0 && (
+          <span className="text-zinc-700">⟳ <b className="mono">{(counts.Queued || 0) + (counts.Uploading || 0) + (counts.Reading || 0) + (counts.Classifying || 0)}</b> in progress</span>
+        )}
+      </div>
 
       <div className="max-h-72 overflow-y-auto">
         <table className="w-full dense-table text-xs">

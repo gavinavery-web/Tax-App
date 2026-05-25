@@ -57,6 +57,38 @@ function Dropzone({ onFiles }) {
     handle(e.dataTransfer.files);
   };
 
+  // Fix 7: paste-from-clipboard support (screenshots from Snipping Tool / macOS).
+  // Global listener so the user doesn't have to focus the dropzone first.
+  // Only forwards image/* files; ignores text/html paste in inputs.
+  useEffect(() => {
+    const handlePaste = (e) => {
+      // Don't hijack paste inside text inputs / textareas
+      const tag = (e.target?.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || e.target?.isContentEditable) return;
+      const items = e.clipboardData?.items;
+      if (!items || !items.length) return;
+      const files = [];
+      for (const it of items) {
+        if (it.kind === "file" && (it.type || "").startsWith("image/")) {
+          const f = it.getAsFile();
+          if (!f) continue;
+          const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+          const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
+          const named = new File([f], f.name && f.name !== "image.png" ? f.name : `screenshot-${ts}.${ext}`, { type: f.type });
+          files.push(named);
+        }
+      }
+      if (files.length) {
+        e.preventDefault();
+        toast.success(`Pasted ${files.length} screenshot(s) — uploading…`);
+        handle(files);
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div
       onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
@@ -67,7 +99,7 @@ function Dropzone({ onFiles }) {
     >
       <div className="flex flex-col items-center gap-2">
         <Upload className="w-6 h-6 text-zinc-500" />
-        <div className="text-sm text-zinc-700" style={{ fontFamily: "Chivo" }}>Drag a folder or files here, or click to browse</div>
+        <div className="text-sm text-zinc-700" style={{ fontFamily: "Chivo" }}>Drag a folder or files here, click to browse, or paste a screenshot (Ctrl/Cmd+V)</div>
         <div className="text-[11px] text-zinc-500 mono">PDF · PNG/JPG · DOCX · XLSX · CSV · TXT — no file count limit</div>
         <div className="flex gap-2 mt-2">
           <input ref={fileRef} type="file" multiple accept={ACCEPTED} hidden onChange={(e) => handle(e.target.files)} data-testid="dropzone-files-input" />
@@ -204,6 +236,20 @@ export default function EvidenceRegister() {
   const ty = params.get("tax_year") || "all";
   const review = params.get("review") || "all";
   const [editId, setEditId] = useState(null);
+
+  // Fix 5: deep-link from a bank transaction / PAYG row.
+  // ?open=<docId> → auto-open the EditRow dialog for that document, then
+  // strip the query param so refresh doesn't re-trigger.
+  useEffect(() => {
+    const openId = params.get("open");
+    if (openId) {
+      setEditId(openId);
+      const np = new URLSearchParams(params);
+      np.delete("open");
+      setParams(np, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const load = async () => {
     const q = {};

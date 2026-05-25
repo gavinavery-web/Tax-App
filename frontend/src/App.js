@@ -3,6 +3,7 @@ import "@/App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "sonner";
 import Layout from "@/components/Layout";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import Dashboard from "@/pages/Dashboard";
 import EvidenceRegister from "@/pages/EvidenceRegister";
 import MissingEvidence from "@/pages/MissingEvidence";
@@ -19,23 +20,25 @@ function App() {
   return (
     <div className="App">
       <BrowserRouter>
-        <Routes>
-          <Route element={<Layout />}>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/register" element={<EvidenceRegister />} />
-            <Route path="/missing-evidence" element={<MissingEvidence />} />
-            <Route path="/missing" element={<MissingEvidence />} />
-            <Route path="/reports" element={<Reports />} />
-            <Route path="/settings" element={<Settings />} />
-            {/* Stage 7 Phase 3 */}
-            <Route path="/tax-years" element={<TaxYears />} />
-            <Route path="/tax-years/:year" element={<TaxYearBreakdown />} />
-            <Route path="/bank-transactions" element={<BankTransactions />} />
-            <Route path="/rubbish-bin" element={<RubbishBin />} />
-            <Route path="/properties" element={<Properties />} />
-            <Route path="/manual-entry" element={<ManualEntry />} />
-          </Route>
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route element={<Layout />}>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/register" element={<EvidenceRegister />} />
+              <Route path="/missing-evidence" element={<MissingEvidence />} />
+              <Route path="/missing" element={<MissingEvidence />} />
+              <Route path="/reports" element={<Reports />} />
+              <Route path="/settings" element={<Settings />} />
+              {/* Stage 7 Phase 3 */}
+              <Route path="/tax-years" element={<TaxYears />} />
+              <Route path="/tax-years/:year" element={<TaxYearBreakdown />} />
+              <Route path="/bank-transactions" element={<BankTransactions />} />
+              <Route path="/rubbish-bin" element={<RubbishBin />} />
+              <Route path="/properties" element={<Properties />} />
+              <Route path="/manual-entry" element={<ManualEntry />} />
+            </Route>
+          </Routes>
+        </ErrorBoundary>
       </BrowserRouter>
       <Toaster position="top-right" richColors closeButton />
     </div>

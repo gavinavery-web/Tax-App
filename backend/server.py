@@ -953,9 +953,19 @@ async def update_document(doc_id: str, payload: DocumentUpdate):
     existing = await db.documents.find_one({"id": doc_id}, {"_id": 0})
     if existing is None:
         raise HTTPException(404, "Document not found")
-    if update.get("accountant_review") == "No" and existing.get("risk_level") != "Red":
+    # Stage 5 + Fix 9 — recompute review-related fields in lockstep so the UI
+    # shows the new "settled" status immediately on save.
+    if update.get("accountant_review") == "No":
         update["accountant_review_required"] = False
-        update["status"] = "Complete"
+        update["accountant_review_reason"] = None
+        # Only auto-Complete if not red-risk (red still wants a human look).
+        if existing.get("risk_level") != "Red":
+            update["status"] = "Complete"
+    elif update.get("accountant_review") == "Yes":
+        update["accountant_review_required"] = True
+        if not (existing.get("accountant_review_reason") or update.get("accountant_review_reason")):
+            update["accountant_review_reason"] = "Flagged by user"
+        update["status"] = "Accountant review"
     res = await db.documents.update_one({"id": doc_id}, {"$set": update})
     if res.matched_count == 0:
         raise HTTPException(404, "Document not found")
@@ -2113,6 +2123,74 @@ async def list_rubbish_bin():
     """Soft-deleted documents."""
     cursor = db.documents.find({"is_deleted": True}, {"_id": 0}).sort("deleted_at", -1)
     return await cursor.to_list(2000)
+
+
+@api_router.post("/rubbish-bin/empty")
+async def empty_rubbish_bin(payload: dict | None = None):
+    """Permanently delete every soft-deleted document.
+
+    For each row: best-effort move the Drive copy to Drive trash, best-effort
+    delete the local staging file, then drop the document row + any manual
+    figures linked to it. Returns granular counts so the UI can show partial
+    Drive failures. Idempotent — re-running on an empty bin returns zeros.
+    """
+    _ = payload  # currently no opts; reserved for future ("keep_drive": True)
+    docs = await db.documents.find({"is_deleted": True}, {"_id": 0}).to_list(10000)
+
+    db_deleted = 0
+    drive_trashed = 0
+    drive_failed: list[dict] = []
+    local_deleted = 0
+
+    drive_svc = None
+    try:
+        if await get_drive_credentials_doc():
+            drive_svc = await get_drive_service()
+    except Exception as e:
+        logger.warning(f"Drive unavailable during empty-bin: {e}")
+
+    for d in docs:
+        doc_id = d.get("id")
+        dfid = d.get("drive_file_id")
+        if dfid and drive_svc is not None:
+            try:
+                drive_svc.files().update(fileId=dfid, body={"trashed": True}).execute()
+                drive_trashed += 1
+            except Exception as e:
+                drive_failed.append({
+                    "doc_id": doc_id,
+                    "filename": d.get("name") or d.get("original_filename"),
+                    "drive_file_id": dfid,
+                    "error": str(e)[:200],
+                })
+
+        local = d.get("local_path")
+        if local:
+            try:
+                from pathlib import Path as _P
+                p = _P(local)
+                if p.exists():
+                    p.unlink()
+                    local_deleted += 1
+            except Exception as e:
+                logger.warning(f"local file delete failed for {doc_id}: {e}")
+
+        await db.figures.delete_many({"document_id": doc_id})
+        res = await db.documents.delete_one({"id": doc_id})
+        db_deleted += res.deleted_count
+
+    return {
+        "success": True,
+        "db_deleted": db_deleted,
+        "drive_trashed": drive_trashed,
+        "drive_failed": drive_failed,
+        "local_deleted": local_deleted,
+        "message": (
+            f"Removed {db_deleted} document(s) from the app. "
+            f"Trashed {drive_trashed} Drive file(s). "
+            + (f"{len(drive_failed)} Drive failure(s) — see details." if drive_failed else "")
+        ).strip(),
+    }
 
 
 # =================== Stage 7 Phase 3 — Properties ===================

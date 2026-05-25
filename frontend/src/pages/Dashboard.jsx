@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { StatusPill } from "../components/StatusPill";
 import { Cloud, CloudOff, AlertCircle, Banknote, FileStack, ShieldCheck, AlertTriangle as AlertTri, Upload as UploadIcon, CheckCircle2, PackageOpen } from "lucide-react";
 import { fmtAUD } from "../lib/constants";
-import { Link } from "react-router-dom";
 import { API } from "../lib/api";
 
 export default function Dashboard() {
@@ -244,39 +244,58 @@ export default function Dashboard() {
         })}
       </div>
 
-      {/* PAYG preloaded */}
-      <div className="bg-white border border-zinc-200 rounded-sm">
+      {/* PAYG preloaded — links each figure to its source document */}
+      <div className="bg-white border border-zinc-200 rounded-sm" data-testid="payg-section">
         <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200">
           <div className="flex items-center gap-2">
             <Banknote className="w-4 h-4 text-zinc-700" />
-            <div className="text-sm font-semibold" style={{ fontFamily: "Chivo" }}>Preloaded PAYG income (known facts)</div>
+            <div className="text-sm font-semibold" style={{ fontFamily: "Chivo" }}>PAYG income (from confirmed payment summaries)</div>
           </div>
-          <div className="text-[11px] text-zinc-500">From confirmed PAYG payment summaries</div>
+          <Link to="/register?category=02%20PAYG%20Income" className="text-xs text-blue-700 hover:underline" data-testid="payg-manage-link">Manage in Evidence Register →</Link>
         </div>
         <table className="w-full dense-table text-sm">
           <thead>
-            <tr><th>Tax year</th><th>Employer</th><th className="text-right">Amount (AUD)</th></tr>
+            <tr><th>Tax year</th><th>Employer</th><th className="text-right">Amount (AUD)</th><th className="text-right">Source</th></tr>
           </thead>
           <tbody>
+            {paygFigures.length === 0 && (
+              <tr><td colSpan="4" className="text-center text-zinc-500 text-xs py-4" data-testid="payg-empty">
+                No PAYG figures yet. Upload a PAYG payment summary in the Evidence Register and figures will appear here automatically.
+              </td></tr>
+            )}
             {paygFigures.sort((a, b) => (a.tax_year || "").localeCompare(b.tax_year) || a.description.localeCompare(b.description)).map((f) => (
               <tr key={f.id}>
                 <td className="mono">{f.tax_year}</td>
                 <td>{f.description}</td>
                 <td className="mono text-right">{fmtAUD(f.amount)}</td>
+                <td className="text-right text-xs">
+                  {f.document_id ? (
+                    <Link to={`/register?open=${encodeURIComponent(f.document_id)}`} className="text-blue-700 hover:underline" data-testid={`payg-source-link-${f.id}`}>view source</Link>
+                  ) : <span className="text-zinc-400">—</span>}
+                </td>
               </tr>
             ))}
-            <tr style={{ background: "#FAFAFA" }}>
-              <td className="font-semibold">FY2024 total</td>
-              <td></td>
-              <td className="mono text-right font-semibold">{fmtAUD(totalByYear("FY2024"))}</td>
-            </tr>
-            <tr style={{ background: "#FAFAFA" }}>
-              <td className="font-semibold">FY2025 total</td>
-              <td></td>
-              <td className="mono text-right font-semibold">{fmtAUD(totalByYear("FY2025"))}</td>
-            </tr>
+            {paygFigures.length > 0 && (
+              <>
+                <tr style={{ background: "#FAFAFA" }}>
+                  <td className="font-semibold">FY2024 total</td>
+                  <td></td>
+                  <td className="mono text-right font-semibold">{fmtAUD(totalByYear("FY2024"))}</td>
+                  <td></td>
+                </tr>
+                <tr style={{ background: "#FAFAFA" }}>
+                  <td className="font-semibold">FY2025 total</td>
+                  <td></td>
+                  <td className="mono text-right font-semibold">{fmtAUD(totalByYear("FY2025"))}</td>
+                  <td></td>
+                </tr>
+              </>
+            )}
           </tbody>
         </table>
+        <div className="px-4 py-2 border-t border-zinc-200 bg-zinc-50 text-[11px] text-zinc-600">
+          Figures update automatically when you upload PAYG payment summaries to the Evidence Register. Click <span className="mono">view source</span> to edit an individual figure.
+        </div>
       </div>
 
     </div>

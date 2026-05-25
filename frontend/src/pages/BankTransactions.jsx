@@ -25,15 +25,17 @@ const SECTIONS = [
 ];
 
 const STATUS_OPTIONS = [
-  { value: "all", label: "All" },
-  { value: "candidate", label: "Candidate" },
-  { value: "private", label: "Private (skipped)" },
+  { value: "needs_action", label: "Needs action (default)" },
+  { value: "all", label: "All transactions" },
+  { value: "candidate", label: "Candidate (unresolved)" },
+  { value: "added", label: "Added to a return" },
+  { value: "private", label: "Private / ignored" },
 ];
 
 export default function BankTransactions() {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [status, setStatus] = useState("all");
+  const [status, setStatus] = useState("needs_action");
   const [propertyFilter, setPropertyFilter] = useState("all");
   const [addModalTx, setAddModalTx] = useState(null);
 
@@ -58,7 +60,18 @@ export default function BankTransactions() {
   }, [transactions]);
 
   const filtered = useMemo(() => transactions.filter((t) => {
-    if (status !== "all" && t.evidence_status !== status) return false;
+    // Default view: only show transactions that still need user action —
+    // not already added to a return, not marked private, not auto-ignored noise.
+    if (status === "needs_action") {
+      if (t.used_in_return) return false;
+      if (t.evidence_status === "private") return false;
+      if (t.category_suggested === "noise_tiny_amount") return false;
+      if (t.category_suggested === "internal_transfer") return false;
+    } else if (status === "added") {
+      if (!t.used_in_return) return false;
+    } else if (status !== "all") {
+      if (t.evidence_status !== status) return false;
+    }
     if (propertyFilter !== "all" && t.property_match !== propertyFilter) return false;
     return true;
   }), [transactions, status, propertyFilter]);
@@ -174,7 +187,20 @@ function TransactionRow({ t, onUse, onAdd, onIgnore }) {
             {t.used_in_return && <Tag tone="emerald">In return</Tag>}
             {t.review_required && <Tag tone="amber">Review</Tag>}
           </div>
-          <div className="font-medium text-zinc-900 text-sm">{t.description_cleaned || t.description_raw}</div>
+          <div className="font-medium text-zinc-900 text-sm">
+            {t.source_document_id ? (
+              <Link
+                to={`/register?open=${encodeURIComponent(t.source_document_id)}`}
+                className="text-blue-700 hover:text-blue-900 hover:underline"
+                title={`Open source: ${t.source_filename || "document"}`}
+                data-testid={`txn-source-link-${t.id}`}
+              >
+                {t.description_cleaned || t.description_raw}
+              </Link>
+            ) : (
+              <span>{t.description_cleaned || t.description_raw}</span>
+            )}
+          </div>
           {hasRawDistinct && (
             <div className="mt-1.5 p-1.5 bg-zinc-50 border-l-2 border-zinc-300 rounded-sm">
               <div className="text-[10px] uppercase tracking-wide text-zinc-500 mono">Raw bank line</div>

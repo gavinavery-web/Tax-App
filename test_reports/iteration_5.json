@@ -1,0 +1,36 @@
+{
+  "summary": "Stage 7 FINAL workflow fix (10 surgical fixes) — backend + frontend verification. Wrote /app/backend/tests/test_workflow_fix.py (8 tests, 100% passing) covering Fix 3 auto-triage (tiny<$1 → private/noise_tiny_amount, transfer-to → private/internal_transfer, account-fee → candidate/bank_fee+accountant_review, interest credit → confirmed/interest_income), Fix 6 empty-bin (idempotent zeros on empty state + create→soft-delete→empty round-trip increments db_deleted), and Fix 9 accountant_review lockstep (No→required=False+status=Complete; Yes→required=True+status='Accountant review'+reason='Flagged by user' default). Full regression suite: 114 passed, 4 skipped (up from 105+5; +8 new tests, -1 skip drained). Frontend Playwright on live preview URL verified: Dashboard payg-section + payg-manage-link → /register?category=02%20PAYG%20Income ✓; BankTransactions filter-status defaults to 'Needs action (default)' with all 5 expected options ✓; RubbishBin empty-bin-btn correctly HIDDEN when bin empty ('Rubbish bin is empty' UI) ✓; EvidenceRegister loads with paste hint 'paste a screenshot (Ctrl/Cmd+V)' ✓; ErrorBoundary not triggered on normal nav ✓. Fixes 1, 2, 5, 7, 10 verified by code review against the reference files — all data-testids/try-catches/listeners/Routes wrapping present and correct.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_workflow_fix.py",
+    "/app/test_reports/pytest/workflow_fix_full.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "All 10 fixes implemented correctly per spec. UploadQueue.jsx decide/cancelOne/cancelAll/clearDone wrapped in try/catch + finally→load() (lines 84-110), summary band at lines 215-227 with all 6 glyphs (filed/inbox/duplicate/error/cancelled/in-progress) and data-testid='upload-summary'.",
+    "ErrorBoundary.jsx (48 lines) uses correct React class-component pattern; App.js line 23 wraps <Routes> ✓.",
+    "bank_transaction_extractor.py classify_transaction_by_rules has the 4 auto-triage blocks (0a-0d) BEFORE the main rules engine — correct precedence so tiny/transfer/fee/interest never fall through to AI.",
+    "server.py PATCH /documents/{id} lines 956-968 correctly recomputes accountant_review_required + status in lockstep (No→clear+Complete if not Red; Yes→required+'Accountant review'+default reason). Verified via 2 pytest cases.",
+    "POST /api/rubbish-bin/empty (line 2128) wraps Drive trash per-file in try/except → granular drive_failed[] reporting; idempotent on empty bin (returns zeros). Verified.",
+    "EvidenceRegister.jsx paste handler (lines 60-89) correctly ignores INPUT/TEXTAREA targets, accepts only image/* clipboard items, names files screenshot-{ts}.{ext}.",
+    "BankTransactions.jsx STATUS_OPTIONS (line 27-33) + default useState('needs_action') (line 38) + frontend-side filter at line 65 hide used_in_return/private/noise correctly.",
+    "Dashboard.jsx PAYG section (line 248) has payg-section, payg-empty empty-state cell (line 262), payg-source-link-{id} per-row source links (line 273), payg-manage-link top-right.",
+    "RubbishBin.jsx empty-bin-btn (line 88) correctly gated on docs.length>0; Dialog with empty-bin-confirm-input + empty-bin-confirm-btn disabled until input='DELETE' (line 152).",
+    "server.py is still 2501 lines — consider splitting into routers (admin, dashboard, bank, documents) for maintainability. Same comment as iteration_4; non-blocking."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_workflow_fix.py (new — 8 tests across 3 classes: TestAutoTriage, TestEmptyRubbishBin, TestAccountantReviewLockstep)"
+  ],
+  "success_rate": {"backend": "100% (114/114 active, 8 new workflow-fix tests all green)", "frontend": "100% (all 10 fixes verified — 5 via e2e Playwright on live URL, 5 via code review against reference files)"},
+  "test_credentials": "n/a — app has no auth",
+  "seed_data_creation": "Test suite creates+cleans up its own dummy docs via POST /api/documents (multipart) → POST /documents/{id}/delete → POST /api/rubbish-bin/empty. No leftover data after run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All 10 surgical fixes verified. Regression at 114/114. New test file /app/backend/tests/test_workflow_fix.py — keep green. The 15-step user acceptance walkthrough: steps 2,4,5,6,7,9,11,12,13,15 verifiable in current env; steps 1,3,8,10,14 require live Drive uploads (DB currently mostly empty so a full walkthrough needs the user to upload real evidence). Bin was repeatedly drained during tests — currently 0 docs in rubbish bin.",
+  "rca_of_the_issue": "No bugs found. All 10 fixes (UploadQueue try/catch + summary band, ErrorBoundary global, bank auto-triage 4-rule prelude, BankTransactions default filter, transaction→register source link, empty-bin endpoint+UI, paste-from-clipboard dropzone, Dashboard PAYG section, accountant_review lockstep PATCH, queue summary band) are implemented correctly and behave per spec."
+}
