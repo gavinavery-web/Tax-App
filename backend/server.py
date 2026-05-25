@@ -1125,7 +1125,7 @@ def card_status(card, total, review_count):
 
 @api_router.get("/dashboard")
 async def dashboard():
-    all_docs = await db.documents.find({}, {"_id": 0}).to_list(5000)
+    all_docs = await db.documents.find({"is_deleted": {"$ne": True}}, {"_id": 0}).to_list(5000)
     cards = []
     for card in DASHBOARD_CARDS:
         if card["type"] == "tax_year":
@@ -1157,8 +1157,9 @@ async def dashboard_stats():
     "needs_review", and "missing_critical" aggregates the UI surfaces as
     headline numbers. Single-user app, no auth.
     """
-    # Total documents
-    total = await db.documents.count_documents({})
+    # Total documents (live only — soft-deleted live in the Rubbish Bin).
+    LIVE = {"is_deleted": {"$ne": True}}
+    total = await db.documents.count_documents(LIVE)
 
     # Per-category counts — uses the canonical folder names.
     categories: dict[str, int] = {}
@@ -1168,16 +1169,18 @@ async def dashboard_stats():
         "07 Bank Statements", "08 Salary Packaging Maxxia",
         "09 Accountant Review", "10 Missing Evidence", "11 Final Accountant Pack",
     ]:
-        categories[cat] = await db.documents.count_documents({"category": cat})
+        categories[cat] = await db.documents.count_documents({**LIVE, "category": cat})
 
     # Documents that were confidently filed (not Inbox, conf Confirmed/Likely).
     classified = await db.documents.count_documents({
+        **LIVE,
         "category": {"$ne": "00 Inbox"},
         "category_confidence": {"$in": ["Confirmed", "Likely"]},
     })
 
     # Anything the human needs to look at.
     needs_review = await db.documents.count_documents({
+        **LIVE,
         "$or": [
             {"category": "00 Inbox"},
             {"category": "09 Accountant Review"},
@@ -1309,14 +1312,16 @@ async def dashboard_readiness():
             blockers.append({"key": f"queue_{st.lower()}", "count": n,
                              "reason": f"{n} upload(s) in '{st}' state"})
 
-    # Documents in 00 Inbox
-    inbox_docs = await db.documents.count_documents({"category": "00 Inbox"})
+    # Documents in 00 Inbox (excluding rubbish-bin rows)
+    LIVE = {"is_deleted": {"$ne": True}}
+    inbox_docs = await db.documents.count_documents({**LIVE, "category": "00 Inbox"})
     if inbox_docs:
         blockers.append({"key": "inbox_docs", "count": inbox_docs,
                          "reason": f"{inbox_docs} document(s) still in 00 Inbox"})
 
     # Accountant-review-required and not yet user-confirmed
     review_pending = await db.documents.count_documents({
+        **LIVE,
         "$or": [
             {"accountant_review_required": True},
             {"accountant_review": "Yes"},
@@ -1329,14 +1334,14 @@ async def dashboard_readiness():
 
     # Red-risk documents not yet user-confirmed
     red_unconfirmed = await db.documents.count_documents({
-        "risk_level": "Red", "user_confirmed": {"$ne": True},
+        **LIVE, "risk_level": "Red", "user_confirmed": {"$ne": True},
     })
     if red_unconfirmed:
         blockers.append({"key": "red_risk", "count": red_unconfirmed,
                          "reason": f"{red_unconfirmed} red-risk document(s)"})
 
     # Unsure tax year
-    unsure_fy = await db.documents.count_documents({"tax_year": "Unsure"})
+    unsure_fy = await db.documents.count_documents({**LIVE, "tax_year": "Unsure"})
     if unsure_fy:
         blockers.append({"key": "unsure_fy", "count": unsure_fy,
                          "reason": f"{unsure_fy} document(s) with Unsure tax year"})
@@ -1986,6 +1991,87 @@ async def use_transaction_in_return(tx_id: str):
     return {"success": True, "item_id": item_id}
 
 
+@api_router.post("/bank-transactions/{tx_id}/add-to-return")
+async def add_transaction_to_return(tx_id: str, payload: dict):
+    """Manually promote a bank transaction into a tax_return_item with user-
+    chosen year/section/amount/description. Bypasses the Confirmed/Likely +
+    not-private guard so users can override AI classification when needed.
+    Required: tax_year, section, income_or_deduction. Optional: amount_cents,
+    description, notes."""
+    tx = await db.bank_transactions.find_one({"id": tx_id}, {"_id": 0})
+    if not tx:
+        raise HTTPException(404, "bank transaction not found")
+    if tx.get("used_in_return"):
+        raise HTTPException(400, "transaction already added to a return")
+
+    for f in ("tax_year", "section", "income_or_deduction"):
+        if payload.get(f) in (None, ""):
+            raise HTTPException(400, f"missing required field: {f}")
+    if payload["income_or_deduction"] not in ("income", "deduction"):
+        raise HTTPException(400, "income_or_deduction must be 'income' or 'deduction'")
+    if payload["section"] not in VALID_TAX_SECTIONS:
+        raise HTTPException(400, f"invalid section. Valid: {sorted(VALID_TAX_SECTIONS)}")
+
+    amount_cents = int(payload.get("amount_cents") or tx.get("amount_cents") or 0)
+    if amount_cents <= 0:
+        raise HTTPException(400, "amount_cents must be > 0")
+    description = (payload.get("description") or tx.get("description_cleaned") or tx.get("description_raw") or "").strip()
+    if not description:
+        raise HTTPException(400, "description is required")
+
+    item_id = await create_manual_tax_return_item(
+        db,
+        tax_year=payload["tax_year"],
+        section=payload["section"],
+        amount_cents=amount_cents,
+        description=description,
+        income_or_deduction=payload["income_or_deduction"],
+        source_document_id=tx.get("source_document_id"),
+        notes=payload.get("notes", ""),
+    )
+    # Annotate the new item with the bank-transaction backlink so the Tax
+    # Year breakdown can show "Bank txn" badges and the round-trip delete
+    # can release the transaction.
+    now = utc_now_iso()
+    await db.tax_return_items.update_one(
+        {"id": item_id},
+        {"$set": {
+            "source_type": "bank_transaction",
+            "source_bank_transaction_id": tx_id,
+            "source_filename": tx.get("source_filename"),
+            "source_quote": tx.get("description_raw"),
+            "manual_override": True,
+            "updated_at": now,
+        }},
+    )
+    await db.bank_transactions.update_one(
+        {"id": tx_id},
+        {"$set": {
+            "used_in_return": True,
+            "evidence_status": "used",
+            "user_confirmed": True,
+            "updated_at": now,
+        }},
+    )
+    return {"success": True, "item_id": item_id, "tax_year": payload["tax_year"]}
+
+
+@api_router.post("/bank-transactions/{tx_id}/ignore")
+async def ignore_transaction(tx_id: str):
+    """Mark a transaction as private/not-tax-related. Idempotent."""
+    res = await db.bank_transactions.update_one(
+        {"id": tx_id},
+        {"$set": {
+            "evidence_status": "private",
+            "user_confirmed": True,
+            "updated_at": utc_now_iso(),
+        }},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "bank transaction not found")
+    return {"success": True}
+
+
 # =================== Stage 7 Phase 3 — Deletion / Rubbish Bin ===================
 
 @api_router.post("/documents/{doc_id}/delete")
@@ -2098,10 +2184,21 @@ async def delete_property_period_endpoint(property_id: str, period_id: str):
 async def reset_test_data(payload: dict | None = None):
     payload = payload or {}
     reset_properties = bool(payload.get("reset_properties", False))
+    trash_drive = bool(payload.get("trash_drive", True))
     now = utc_now_iso()
+    drive_files_trashed = 0
+    drive_files_failed: list[dict] = []
     try:
-        # 1. Soft-delete every live document (Drive copy + local file untouched)
-        docs_before = await db.documents.count_documents({"is_deleted": {"$ne": True}})
+        # 0. Snapshot live documents BEFORE soft-delete so we can trash their
+        # Drive copies. We grab drive_file_id + name only — the document row
+        # itself is still in Mongo, just flagged is_deleted=True.
+        live_docs = await db.documents.find(
+            {"is_deleted": {"$ne": True}},
+            {"_id": 0, "id": 1, "name": 1, "drive_file_id": 1},
+        ).to_list(5000)
+        docs_before = len(live_docs)
+
+        # 1. Soft-delete every live document (DB row preserved).
         docs_res = await db.documents.update_many(
             {"is_deleted": {"$ne": True}},
             {"$set": {
@@ -2113,16 +2210,39 @@ async def reset_test_data(payload: dict | None = None):
             }},
         )
 
-        # 2. Wipe generated data (bank transactions + tax return items + manual
-        # figures). These are entirely re-derivable on next upload, so we hard-
-        # delete to keep the schema clean.
+        # 2. Optionally move corresponding Drive files to Drive trash. This is
+        # best-effort per file; any failure is logged and reported back so the
+        # user can manually clean up.
+        if trash_drive and live_docs:
+            try:
+                creds = await get_drive_credentials_doc()
+                if creds:
+                    drive_service = await get_drive_service()
+                    for d in live_docs:
+                        dfid = d.get("drive_file_id")
+                        if not dfid:
+                            continue
+                        try:
+                            drive_service.files().update(
+                                fileId=dfid, body={"trashed": True}
+                            ).execute()
+                            drive_files_trashed += 1
+                        except Exception as e:
+                            drive_files_failed.append({
+                                "file_id": dfid,
+                                "name": d.get("name"),
+                                "error": str(e)[:200],
+                            })
+                            logger.warning(f"trash Drive file {dfid} failed: {e}")
+            except Exception as e:
+                logger.warning(f"Drive service unavailable for reset: {e}")
+
+        # 3. Wipe generated data (entirely re-derivable on next upload).
         trans_res = await db.bank_transactions.delete_many({})
         items_res = await db.tax_return_items.delete_many({})
         figs_res = await db.figures.delete_many({"figure_type": {"$ne": "payg_income"}})
 
-        # 3. Reset missing-evidence rows: clear satisfaction links and put every
-        # non-N/A row back to Outstanding. We DO NOT touch "Not applicable" rows
-        # because those represent explicit user decisions worth preserving.
+        # 4. Reset every non-N/A missing-evidence row to canonical state.
         me_res = await db.missing_items.update_many(
             {"status": {"$ne": "Not applicable"}},
             {"$set": {
@@ -2140,15 +2260,12 @@ async def reset_test_data(payload: dict | None = None):
             }},
         )
 
-        # 4. Clear the upload queue (Filed/Error/Cancelled rows from testing).
+        # 5. Clear upload queue + AI cache + error log.
         queue_res = await db.upload_queue.delete_many({})
-
-        # 5. AI cache + error log — safe to clear; they're observability data only.
         await db.ai_response_cache.delete_many({})
         await db.ai_errors.delete_many({})
 
-        # 6. Optionally reset properties. Re-seed defaults so the Properties
-        # page + tax classifier keep working.
+        # 6. Optionally reset + re-seed properties.
         props_deleted = 0
         if reset_properties:
             res = await db.properties.delete_many({})
@@ -2164,25 +2281,90 @@ async def reset_test_data(payload: dict | None = None):
 
         logger.info(
             f"admin reset: {docs_res.modified_count} docs soft-deleted, "
+            f"{drive_files_trashed} Drive files trashed ({len(drive_files_failed)} failed), "
             f"{trans_res.deleted_count} transactions wiped, "
             f"{items_res.deleted_count} tax items wiped, "
             f"{me_res.modified_count} missing rows reset"
         )
         return {
             "success": True,
-            "documents_moved_to_bin": docs_res.modified_count,
             "documents_before": docs_before,
+            "documents_moved_to_bin": docs_res.modified_count,
+            "drive_files_trashed": drive_files_trashed,
+            "drive_files_failed": drive_files_failed,
             "bank_transactions_deleted": trans_res.deleted_count,
             "tax_return_items_deleted": items_res.deleted_count,
             "manual_figures_deleted": figs_res.deleted_count,
             "missing_items_reset": me_res.modified_count,
             "upload_queue_cleared": queue_res.deleted_count,
             "properties_reseeded": props_deleted if reset_properties else 0,
-            "message": "Reset complete. Documents moved to Rubbish Bin (restorable). Drive copies preserved.",
+            "message": "Reset complete. Documents moved to Rubbish Bin (restorable). Drive copies trashed when possible.",
         }
     except Exception as e:
         logger.exception("admin reset failed")
         raise HTTPException(500, f"Reset failed: {e}")
+
+
+# =================== Stage 7 Phase 3 — Admin: AI Usage transparency ===================
+
+@api_router.get("/ai-usage")
+async def get_ai_usage():
+    """Real AI provider + cost summary. Computed live from the database, not
+    hardcoded. Shows what's being used, how much it has cost so far, and who
+    pays for it (Emergent LLM key = no direct user charge)."""
+    # Provider identity — the hybrid pipeline is Gemini-flash → Claude-Sonnet
+    # via the Emergent Universal Key. There is no per-user Anthropic/OpenAI
+    # billing surface for this app.
+    has_emergent_key = bool(os.environ.get("EMERGENT_LLM_KEY"))
+
+    # Real costs from documents + cache.
+    docs_total = await db.documents.count_documents({"is_deleted": {"$ne": True}})
+    docs_ai = await db.documents.count_documents({
+        "is_deleted": {"$ne": True},
+        "ai_cost_usd": {"$gt": 0},
+    })
+    cached = await db.documents.count_documents({
+        "is_deleted": {"$ne": True},
+        "ai_response_cached": True,
+    })
+
+    cost_pipe = [
+        {"$match": {"is_deleted": {"$ne": True}}},
+        {"$group": {
+            "_id": None,
+            "total_cost_usd": {"$sum": {"$ifNull": ["$ai_cost_usd", 0]}},
+            "gemini_tokens_in": {"$sum": {"$ifNull": ["$gemini_tokens_in", 0]}},
+            "gemini_tokens_out": {"$sum": {"$ifNull": ["$gemini_tokens_out", 0]}},
+            "claude_tokens_in": {"$sum": {"$ifNull": ["$claude_tokens_in", 0]}},
+            "claude_tokens_out": {"$sum": {"$ifNull": ["$claude_tokens_out", 0]}},
+        }},
+    ]
+    agg = await db.documents.aggregate(cost_pipe).to_list(1)
+    totals = agg[0] if agg else {"total_cost_usd": 0.0}
+    total_cost = float(totals.get("total_cost_usd") or 0.0)
+    claude_escalations = await db.documents.count_documents({
+        "is_deleted": {"$ne": True},
+        "claude_tokens_in": {"$gt": 0},
+    })
+
+    return {
+        "provider": "Hybrid: Gemini 1.5 Flash → Claude Sonnet 4.5",
+        "billing_source": "Emergent Universal Key" if has_emergent_key else "Not configured",
+        "is_real_user_charge": False,
+        "documents_processed": docs_ai,
+        "documents_total_active": docs_total,
+        "documents_ai_cached": cached,
+        "claude_escalations": claude_escalations,
+        "total_cost_usd": round(total_cost, 4),
+        "avg_cost_per_document_usd": round(total_cost / docs_ai, 4) if docs_ai else 0.0,
+        "explanation": (
+            "Costs are paid from your Emergent Universal Key balance. Each "
+            "document is first classified by Gemini Flash (cheap); only if "
+            "confidence is low does it escalate to Claude Sonnet (more "
+            "expensive). Cached re-uploads cost $0. To top up: Profile → "
+            "Universal Key → Add Balance."
+        ),
+    }
 
 
 app.include_router(api_router)

@@ -5,7 +5,24 @@ import { api } from "../lib/api";
 import { fmtAUD } from "../lib/constants";
 import { toast } from "sonner";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Textarea } from "../components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
+
+const SECTIONS = [
+  { value: "salary_wages", label: "Salary & Wages", side: "income" },
+  { value: "interest", label: "Interest", side: "income" },
+  { value: "dividends", label: "Dividends", side: "income" },
+  { value: "rental_income", label: "Rental Income", side: "income" },
+  { value: "work_related_car", label: "Work-Related Car", side: "deduction" },
+  { value: "work_related_travel", label: "Work Travel", side: "deduction" },
+  { value: "tools_equipment", label: "Tools & Equipment", side: "deduction" },
+  { value: "union_fees", label: "Union / Professional Fees", side: "deduction" },
+  { value: "donations", label: "Donations", side: "deduction" },
+  { value: "rental_deductions", label: "Rental Property Expenses", side: "deduction" },
+  { value: "other_deductions", label: "Other Deductions", side: "deduction" },
+];
 
 const STATUS_OPTIONS = [
   { value: "all", label: "All" },
@@ -18,6 +35,7 @@ export default function BankTransactions() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("all");
   const [propertyFilter, setPropertyFilter] = useState("all");
+  const [addModalTx, setAddModalTx] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -54,6 +72,16 @@ export default function BankTransactions() {
       load();
     } catch (e) {
       toast.error(e.response?.data?.detail || "Could not promote transaction");
+    }
+  };
+
+  const ignore = async (txId) => {
+    try {
+      await api.post(`/bank-transactions/${txId}/ignore`);
+      toast.success("Marked as private");
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Could not ignore transaction");
     }
   };
 
@@ -101,9 +129,10 @@ export default function BankTransactions() {
         </div>
       ) : (
         <div className="space-y-2">
-          {filtered.map((t) => <TransactionRow key={t.id} t={t} onUse={() => promote(t.id)} />)}
+          {filtered.map((t) => <TransactionRow key={t.id} t={t} onUse={() => promote(t.id)} onAdd={() => setAddModalTx(t)} onIgnore={() => ignore(t.id)} />)}
         </div>
       )}
+      <AddToReturnModal tx={addModalTx} onClose={() => setAddModalTx(null)} onSuccess={() => { setAddModalTx(null); load(); }} />
     </div>
   );
 }
@@ -124,7 +153,7 @@ function Filter({ label, value, onChange, options, testid }) {
   );
 }
 
-function TransactionRow({ t, onUse }) {
+function TransactionRow({ t, onUse, onAdd, onIgnore }) {
   const date = t.transaction_date ? new Date(t.transaction_date).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "—";
   const amountStr = fmtAUD((t.amount_cents || 0) / 100);
   const isDebit = (t.debit_credit || "").toLowerCase() === "debit";
@@ -171,12 +200,32 @@ function TransactionRow({ t, onUse }) {
           {t.balance_cents !== null && t.balance_cents !== undefined && (
             <div className="text-[10px] mono text-zinc-400 mt-0.5">bal {fmtAUD(t.balance_cents / 100)}</div>
           )}
-          {t.evidence_status === "candidate" && !t.used_in_return && (t.confidence === "Confirmed" || t.confidence === "Likely") && (
-            <button
-              onClick={onUse}
-              className="mt-1.5 text-xs px-2 py-1 rounded bg-zinc-900 text-white hover:bg-zinc-800"
-              data-testid={`use-txn-${t.id}`}
-            >Add to return</button>
+          {t.used_in_return ? (
+            <div className="mt-1.5 text-[11px] px-2 py-1 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 font-medium">✓ In return</div>
+          ) : t.evidence_status === "private" ? (
+            <div className="mt-1.5 text-[11px] px-2 py-1 rounded bg-zinc-100 text-zinc-600 border border-zinc-200">Private</div>
+          ) : (
+            <div className="mt-1.5 flex flex-col gap-1">
+              <button
+                onClick={onAdd}
+                className="text-xs px-2 py-1 rounded bg-zinc-900 text-white hover:bg-zinc-800"
+                data-testid={`add-txn-${t.id}`}
+              >Add to return…</button>
+              {(t.confidence === "Confirmed" || t.confidence === "Likely") && (
+                <button
+                  onClick={onUse}
+                  className="text-[10px] px-2 py-0.5 rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-50"
+                  title="Use the AI's suggested year/section as-is"
+                  data-testid={`use-txn-${t.id}`}
+                >Quick add ({t.confidence})</button>
+              )}
+              <button
+                onClick={onIgnore}
+                className="text-[10px] px-2 py-0.5 rounded text-zinc-500 hover:text-red-600"
+                title="Mark as private / not tax related"
+                data-testid={`ignore-txn-${t.id}`}
+              >Ignore</button>
+            </div>
           )}
         </div>
       </div>
@@ -193,4 +242,141 @@ function Tag({ tone, children }) {
     zinc: "bg-zinc-100 text-zinc-700 border-zinc-200",
   };
   return <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${map[tone] || ""}`}>{children}</span>;
+}
+
+// ----------- Add-to-Return modal (manual year/section/amount override) -----------
+function AddToReturnModal({ tx, onClose, onSuccess }) {
+  const [taxYear, setTaxYear] = useState("FY2024");
+  const [side, setSide] = useState("deduction");
+  const [section, setSection] = useState("other_deductions");
+  const [amount, setAmount] = useState("");
+  const [description, setDescription] = useState("");
+  const [notes, setNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!tx) return;
+    // Default the year from the txn date (Australian FY).
+    let fy = "FY2024";
+    try {
+      const d = new Date(tx.transaction_date);
+      fy = (d.getMonth() + 1) >= 7 ? `FY${d.getFullYear() + 1}` : `FY${d.getFullYear()}`;
+      if (!["FY2024", "FY2025"].includes(fy)) fy = "FY2024";
+    } catch (e) { /* keep default */ }
+    setTaxYear(fy);
+    // Default income/deduction from the credit/debit of the txn.
+    const isDebit = (tx.debit_credit || "").toLowerCase() === "debit";
+    setSide(isDebit ? "deduction" : "income");
+    const candidate = tx.tax_section_suggested && SECTIONS.find((s) => s.value === tx.tax_section_suggested);
+    if (candidate) {
+      setSection(candidate.value);
+      setSide(candidate.side);
+    } else {
+      setSection(isDebit ? "other_deductions" : "interest");
+    }
+    setAmount(((tx.amount_cents || 0) / 100).toFixed(2));
+    setDescription(tx.description_cleaned || tx.description_raw || "");
+    setNotes("");
+  }, [tx]);
+
+  if (!tx) return null;
+
+  const availableSections = SECTIONS.filter((s) => s.side === side);
+
+  const onSideChange = (v) => {
+    setSide(v);
+    const first = SECTIONS.find((s) => s.side === v);
+    if (first) setSection(first.value);
+  };
+
+  const submit = async () => {
+    const amtNum = parseFloat(amount);
+    if (!isFinite(amtNum) || amtNum <= 0) { toast.error("Amount must be > 0"); return; }
+    if (!description.trim()) { toast.error("Description is required"); return; }
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/bank-transactions/${tx.id}/add-to-return`, {
+        tax_year: taxYear,
+        section,
+        income_or_deduction: side,
+        amount_cents: Math.round(amtNum * 100),
+        description: description.trim(),
+        notes,
+      });
+      toast.success(`Added to ${data.tax_year} tax return`);
+      onSuccess && onSuccess();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Could not add to return");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={!!tx} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent data-testid="add-to-return-modal" className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Add transaction to tax return</DialogTitle>
+        </DialogHeader>
+        <div className="text-xs text-zinc-500 -mt-2 mb-2 mono truncate" title={tx.description_raw}>
+          From: {tx.source_filename} · {tx.transaction_date}
+        </div>
+        <div className="space-y-3 text-sm">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Tax year</Label>
+              <Select value={taxYear} onValueChange={setTaxYear}>
+                <SelectTrigger data-testid="add-modal-year"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="FY2024">FY2024</SelectItem>
+                  <SelectItem value="FY2025">FY2025</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Type</Label>
+              <Select value={side} onValueChange={onSideChange}>
+                <SelectTrigger data-testid="add-modal-side"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="income">Income</SelectItem>
+                  <SelectItem value="deduction">Deduction</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div>
+            <Label>Section</Label>
+            <Select value={section} onValueChange={setSection}>
+              <SelectTrigger data-testid="add-modal-section"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {availableSections.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Amount (AUD)</Label>
+              <Input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} data-testid="add-modal-amount" />
+            </div>
+            <div>
+              <Label>Description</Label>
+              <Input value={description} onChange={(e) => setDescription(e.target.value)} data-testid="add-modal-desc" />
+            </div>
+          </div>
+          <div>
+            <Label>Notes (optional)</Label>
+            <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} data-testid="add-modal-notes" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button onClick={submit} disabled={busy} data-testid="add-modal-submit">{busy ? "Adding…" : "Add to return"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Label({ children }) {
+  return <div className="text-[11px] mono uppercase text-zinc-500 tracking-wide mb-1">{children}</div>;
 }

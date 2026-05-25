@@ -369,9 +369,12 @@ AI_TIMEOUT_SECONDS = int(os.environ.get("AI_TIMEOUT_SECONDS", "60"))
 
 
 class _Cancelled(Exception):
-    """Cooperative-cancellation sentinel — raised by checkpoints inside the
-    worker; caught by `_process_one` so the row terminates cleanly without
-    creating a document or touching missing-evidence."""
+    """Sentinel raised when a cooperative cancel point fires."""
+
+
+class _OutOfRange(Exception):
+    """Sentinel raised when a bank statement has zero in-scope transactions —
+    triggers a soft-delete + Drive-trash so the workflow isn't cluttered."""
 
 
 async def _check_cancelled(qid: str) -> bool:
@@ -700,6 +703,56 @@ async def _process_one(item: dict):
                 property_periods=property_periods,
             )
             now_iso = utc_now_iso()
+            # Out-of-range filter (Fix 4): drop transactions whose date falls
+            # outside the in-scope FY2024 / FY2025 window. If a statement has
+            # zero in-scope rows, soft-delete the document and trash its
+            # Drive copy so the workflow isn't cluttered.
+            WORKING_FYS = {"FY2024", "FY2025"}
+
+            def _fy_of(iso_date: str) -> str:
+                try:
+                    d = datetime.fromisoformat(iso_date)
+                except (ValueError, TypeError):
+                    return "Unsure"
+                return f"FY{d.year + 1}" if d.month >= 7 else f"FY{d.year}"
+
+            in_range = [t for t in transactions if _fy_of(t.get("transaction_date", "")) in WORKING_FYS]
+            out_of_range = len(transactions) - len(in_range)
+            if transactions and not in_range:
+                # No in-scope rows — reject the statement entirely.
+                logger.info(
+                    f"Bank statement {filename} has 0 transactions in {WORKING_FYS} "
+                    f"(dropped {out_of_range}); soft-deleting document"
+                )
+                await _db.documents.update_one(
+                    {"id": doc_id},
+                    {"$set": {
+                        "is_deleted": True,
+                        "deleted_at": now_iso,
+                        "deleted_reason": "Bank statement entirely outside FY2024/FY2025",
+                        "deleted_by_user": "auto_out_of_range",
+                        "is_bank_statement": True,
+                        "transactions_extracted_count": 0,
+                        "updated_at": now_iso,
+                    }},
+                )
+                # Best-effort Drive trash.
+                doc_row = await _db.documents.find_one({"id": doc_id}, {"_id": 0, "drive_file_id": 1})
+                dfid = doc_row and doc_row.get("drive_file_id")
+                if dfid:
+                    try:
+                        svc = await _get_drive_service()
+                        svc.files().update(fileId=dfid, body={"trashed": True}).execute()
+                    except Exception as e:
+                        logger.warning(f"out-of-range Drive trash failed for {dfid}: {e}")
+                raise _OutOfRange()  # short-circuit out of the try-block
+
+            transactions = in_range
+            if out_of_range:
+                logger.info(
+                    f"Bank statement {filename}: kept {len(in_range)} in-scope, "
+                    f"dropped {out_of_range} out-of-range transactions"
+                )
             if transactions:
                 for t in transactions:
                     t.setdefault("id", str(uuid.uuid4()))
@@ -718,9 +771,13 @@ async def _process_one(item: dict):
                     "transactions_extracted_count": stats["extracted_count"],
                     "transactions_analyzed_by_ai": False,
                     "transaction_ai_cost_usd": stats["ai_cost_usd"],
+                    "transactions_out_of_range": out_of_range,
                     "updated_at": now_iso,
                 }},
             )
+    except _OutOfRange:
+        # Already handled above (doc soft-deleted, Drive trashed).
+        pass
     except Exception as e:
         logger.warning(f"Bank-statement extraction failed for {doc_id} (continuing): {e}")
 

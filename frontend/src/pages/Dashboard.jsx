@@ -27,7 +27,14 @@ export default function Dashboard() {
     setReadiness(rd.data);
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    // Live dashboard — refresh every 10s so changes elsewhere in the app
+    // (uploads finishing, transactions added to a return, reset, etc.) are
+    // reflected without a manual reload.
+    const interval = setInterval(() => { load().catch(() => {}); }, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Memoise per-year PAYG totals — filter+reduce previously ran on every
   // render and was called once per FY card (so twice per render). Recompute

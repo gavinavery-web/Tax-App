@@ -250,7 +250,37 @@ export default function Settings() {
         </div>
       </div>
 
+      <AIUsageCard />
       <ResetTestData />
+    </div>
+  );
+}
+
+// ----------- AI Usage transparency card -----------
+function AIUsageCard() {
+  const [usage, setUsage] = useState(null);
+  useEffect(() => {
+    api.get("/ai-usage").then((r) => setUsage(r.data)).catch(() => setUsage(null));
+  }, []);
+  if (!usage) return null;
+  return (
+    <div className="bg-white border border-zinc-200 rounded-sm mt-4" data-testid="ai-usage-card">
+      <div className="px-4 py-2.5 border-b border-zinc-200">
+        <div className="text-sm font-semibold" style={{ fontFamily: "Chivo" }}>AI cost & usage</div>
+        <div className="text-[11px] text-zinc-500 mt-0.5">Where the $ comes from and who pays.</div>
+      </div>
+      <div className="px-4 py-2">
+        <Row label="Provider" value={usage.provider} testid="ai-usage-provider" />
+        <Row label="Billing source" value={usage.billing_source} testid="ai-usage-billing" />
+        <Row label="Charged to your card?" value={usage.is_real_user_charge ? "Yes" : "No — Emergent free tier"} testid="ai-usage-real" />
+        <Row label="Documents processed" value={String(usage.documents_processed)} testid="ai-usage-docs" />
+        <Row label="Claude escalations" value={String(usage.claude_escalations)} testid="ai-usage-escalations" />
+        <Row label="Avg cost / doc" value={`$${(usage.avg_cost_per_document_usd || 0).toFixed(4)}`} testid="ai-usage-avg" />
+        <Row label="Total cost so far" value={`$${(usage.total_cost_usd || 0).toFixed(4)}`} testid="ai-usage-total" />
+      </div>
+      <div className="px-4 py-2.5 border-t border-zinc-200 bg-blue-50 text-xs text-blue-900 leading-relaxed" data-testid="ai-usage-explanation">
+        {usage.explanation}
+      </div>
     </div>
   );
 }
@@ -262,22 +292,28 @@ function ResetTestData() {
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState("");
   const [resetProps, setResetProps] = useState(false);
+  const [trashDrive, setTrashDrive] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
 
   const run = async () => {
     if (confirm.trim() !== "RESET") { toast.error("Type RESET exactly to confirm"); return; }
     setBusy(true);
     try {
-      const r = await api.post("/admin/reset-test-data", { reset_properties: resetProps });
+      const r = await api.post("/admin/reset-test-data", {
+        reset_properties: resetProps,
+        trash_drive: trashDrive,
+      });
       const d = r.data || {};
+      setResult(d);
       toast.success(
-        `Reset complete: ${d.documents_moved_to_bin || 0} docs → Rubbish Bin · ` +
-        `${d.bank_transactions_deleted || 0} transactions cleared · ` +
-        `${d.tax_return_items_deleted || 0} tax items cleared`
+        `Reset: ${d.documents_moved_to_bin || 0} docs → Bin · ` +
+        `${d.drive_files_trashed || 0} Drive files trashed · ` +
+        `${d.bank_transactions_deleted || 0} txns · ${d.tax_return_items_deleted || 0} tax items cleared`
       );
-      setOpen(false);
       setConfirm("");
-      setResetProps(false);
+      // Light reload so dashboard counts re-fetch cleanly
+      setTimeout(() => { window.location.reload(); }, 1500);
     } catch (e) {
       toast.error(e.response?.data?.detail || "Reset failed");
     } finally {
@@ -312,6 +348,19 @@ function ResetTestData() {
             <label className="flex items-start gap-2 text-xs">
               <input
                 type="checkbox"
+                checked={trashDrive}
+                onChange={(e) => setTrashDrive(e.target.checked)}
+                className="mt-0.5"
+                data-testid="reset-trash-drive-checkbox"
+              />
+              <div>
+                <div className="font-medium text-zinc-800">Also move Drive files to Google Drive trash</div>
+                <div className="text-zinc-500">Recommended. Files stay restorable from Drive for 30 days. Uncheck to leave Drive files in place.</div>
+              </div>
+            </label>
+            <label className="flex items-start gap-2 text-xs">
+              <input
+                type="checkbox"
                 checked={resetProps}
                 onChange={(e) => setResetProps(e.target.checked)}
                 className="mt-0.5"
@@ -332,11 +381,22 @@ function ResetTestData() {
               autoFocus
             />
             <div className="flex gap-2 justify-end">
-              <Button variant="ghost" onClick={() => { setOpen(false); setConfirm(""); setResetProps(false); }} disabled={busy}>Cancel</Button>
+              <Button variant="ghost" onClick={() => { setOpen(false); setConfirm(""); setResetProps(false); setResult(null); }} disabled={busy}>Cancel</Button>
               <Button onClick={run} disabled={busy || confirm.trim() !== "RESET"} className="bg-red-600 hover:bg-red-700 text-white" data-testid="reset-run-btn">
                 {busy ? "Resetting…" : "Confirm reset"}
               </Button>
             </div>
+            {result && result.drive_files_failed && result.drive_files_failed.length > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-sm text-xs text-amber-900" data-testid="reset-drive-warnings">
+                <div className="font-semibold mb-1">⚠ {result.drive_files_failed.length} Drive file(s) could not be trashed</div>
+                <ul className="list-disc ml-5 space-y-0.5">
+                  {result.drive_files_failed.slice(0, 8).map((f, i) => (
+                    <li key={i}><span className="mono">{f.name || f.file_id}</span> — {f.error}</li>
+                  ))}
+                </ul>
+                <div className="mt-1 text-zinc-600">You can trash these manually in Google Drive.</div>
+              </div>
+            )}
           </div>
         )}
       </div>
