@@ -53,7 +53,13 @@ export default function UploadQueue({ onChanged }) {
       setCounts(r.data.counts);
       const firstDup = (r.data.items || []).find((it) => it.status === "Duplicate?");
       setDup((cur) => cur && cur.id === firstDup?.id ? cur : firstDup || null);
-    } catch (e) { /* silent — poll keeps trying */ }
+    } catch (e) {
+      // Polling loop — never block the UI on a transient queue read. We
+      // surface to dev tools so a real outage is visible, but skip toast
+      // (the next poll will retry in <2s).
+      // eslint-disable-next-line no-console
+      console.warn("UploadQueue poll failed:", e?.message || e);
+    }
   }, []);
 
   useEffect(() => {

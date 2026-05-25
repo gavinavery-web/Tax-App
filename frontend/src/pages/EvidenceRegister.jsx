@@ -152,7 +152,13 @@ function EditRow({ docId, open, onClose, reference, onSaved }) {
               <table className="w-full dense-table text-xs">
                 <tbody>
                   {(doc.headline_figures_json || []).map((f, i) => (
-                    <tr key={i} data-testid={`figure-${i}`}>
+                    <tr
+                      // Composite stable key — figures don't carry IDs, but
+                      // (label + amount + source slice) is unique within a
+                      // doc and survives re-sorts of the parent list.
+                      key={`${f.label || "fig"}-${f.amount ?? "?"}-${(f.source_quote || "").slice(0, 20)}-${i}`}
+                      data-testid={`figure-${i}`}
+                    >
                       <td className="font-medium">{f.label}</td>
                       <td className="mono text-right">{fmtAUD(f.amount)}</td>
                       <td><FigureBadge value={f.confidence} /></td>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { StatusPill } from "../components/StatusPill";
 import { Cloud, CloudOff, AlertCircle, Banknote, FileStack, ShieldCheck, AlertTriangle as AlertTri, Upload as UploadIcon, CheckCircle2, PackageOpen } from "lucide-react";
@@ -29,7 +29,18 @@ export default function Dashboard() {
 
   useEffect(() => { load(); }, []);
 
-  const totalByYear = (year) => paygFigures.filter((f) => f.tax_year === year).reduce((s, f) => s + Number(f.amount), 0);
+  // Memoise per-year PAYG totals — filter+reduce previously ran on every
+  // render and was called once per FY card (so twice per render). Recompute
+  // only when `paygFigures` actually changes.
+  const paygTotals = useMemo(() => {
+    const totals = {};
+    for (const f of paygFigures) {
+      const y = f.tax_year || "Unsure";
+      totals[y] = (totals[y] || 0) + Number(f.amount || 0);
+    }
+    return totals;
+  }, [paygFigures]);
+  const totalByYear = (year) => paygTotals[year] || 0;
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto" data-testid="dashboard-page">
