@@ -683,6 +683,47 @@ async def _process_one(item: dict):
     await _raise_if_cancelled(qid)
     await _db.documents.insert_one(doc)
 
+    # ---- Stage 7 Phase 2: bank statement transaction extraction ----
+    # Detect bank statements and extract transactions using the rules-only
+    # extractor (zero AI cost). Failures here are non-fatal — the document
+    # itself is already saved.
+    try:
+        from bank_transaction_extractor import is_bank_statement, extract_and_classify_transactions
+        if is_bank_statement(filename, text or "", cat):
+            property_periods = await _db.properties.find({}, {"_id": 0}).to_list(50)
+            transactions, stats = extract_and_classify_transactions(
+                file_path=str(canonical_path),  # canonical_path persists past staging cleanup
+                mime_type=mime,
+                extracted_text=text or "",
+                source_document_id=doc_id,
+                source_filename=filename,
+                property_periods=property_periods,
+            )
+            now_iso = utc_now_iso()
+            if transactions:
+                for t in transactions:
+                    t.setdefault("id", str(uuid.uuid4()))
+                    t["created_at"] = now_iso
+                    t["updated_at"] = now_iso
+                    t.setdefault("user_confirmed", False)
+                    t.setdefault("used_in_return", False)
+                    t.setdefault("bank_name", "")
+                    t.setdefault("account_number_masked", "")
+                await _db.bank_transactions.insert_many(transactions)
+                logger.info(f"Bank statement: stored {len(transactions)} transactions from {filename}")
+            await _db.documents.update_one(
+                {"id": doc_id},
+                {"$set": {
+                    "is_bank_statement": True,
+                    "transactions_extracted_count": stats["extracted_count"],
+                    "transactions_analyzed_by_ai": False,
+                    "transaction_ai_cost_usd": stats["ai_cost_usd"],
+                    "updated_at": now_iso,
+                }},
+            )
+    except Exception as e:
+        logger.warning(f"Bank-statement extraction failed for {doc_id} (continuing): {e}")
+
     # ---- Stage 2: update missing-evidence tracker (non-blocking) ----
     # Skip auto-matching if we never had usable text to begin with — avoids
     # mis-matching purely on category.

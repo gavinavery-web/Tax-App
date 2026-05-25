@@ -47,6 +47,13 @@ SINGLETON_KEY = "default"  # Single-user app
 
 DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
+# Stage 7 Phase 2 — bank-statement AI cost controls. Rules-only is the
+# default; the AI batch path is opt-in and gated by an explicit cost estimate.
+MAX_AI_COST_PER_BATCH: float = 5.00       # $ per batch
+MAX_AI_MONTHLY_BUDGET: float = 20.00      # $ per calendar month
+AI_COST_PER_TRANSACTION: float = 0.001    # batch rate
+BANK_SETTINGS_KEY = "bank_analysis_settings"
+
 # Local fallback storage when Drive is not connected
 LOCAL_UPLOADS_DIR = ROOT_DIR / "uploads"
 LOCAL_UPLOADS_DIR.mkdir(exist_ok=True)
@@ -1194,6 +1201,91 @@ async def dashboard_stats():
         "missing_total": missing_total,
         "duplicates": await db.upload_queue.count_documents({"status": "Duplicate?"}),
     }
+
+
+# =================== Stage 7 Phase 2: bank settings + AI cost gate ===================
+
+@api_router.get("/bank-settings")
+async def get_bank_settings():
+    """Current bank-analysis settings.
+
+    `max_cost_per_batch` and `monthly_budget` are server-enforced caps and
+    are always present in the response — they come from the constants, not
+    the stored row, so the UI can always render the cost dialog.
+    """
+    s = await db.settings.find_one({"_id": BANK_SETTINGS_KEY}, {"_id": 0}) or {}
+    return {
+        "ai_enabled":          bool(s.get("ai_enabled", False)),
+        "mode":                s.get("mode", "rules_only"),
+        "max_cost_per_batch":  MAX_AI_COST_PER_BATCH,
+        "monthly_budget":      MAX_AI_MONTHLY_BUDGET,
+        "monthly_spend":       float(s.get("monthly_spend") or 0.0),
+        **({"updated_at": s["updated_at"]} if s.get("updated_at") else {}),
+    }
+
+
+@api_router.post("/bank-settings")
+async def update_bank_settings(payload: dict):
+    """Allowed keys are whitelisted to avoid client-injected fields."""
+    allowed = {"ai_enabled", "mode", "max_cost_per_batch", "monthly_budget", "monthly_spend"}
+    update = {k: v for k, v in (payload or {}).items() if k in allowed}
+    if not update:
+        raise HTTPException(400, "no allowed fields in payload")
+    update["updated_at"] = utc_now_iso()
+    await db.settings.update_one(
+        {"_id": BANK_SETTINGS_KEY},
+        {"$set": {"_id": BANK_SETTINGS_KEY, **update}},
+        upsert=True,
+    )
+    return {"success": True, "updated": list(update.keys())}
+
+
+@api_router.post("/bank-transactions/estimate-cost")
+async def estimate_ai_cost(payload: dict):
+    """Estimate the AI cost of analysing N uncertain transactions and
+    report whether the batch + cumulative monthly budget allow it.
+
+    POST body: `{"transaction_ids": [...]}` (a list is required; using POST
+    so a large id list doesn't get URL-truncated)."""
+    ids = (payload or {}).get("transaction_ids") or []
+    if not isinstance(ids, list):
+        raise HTTPException(400, "transaction_ids must be a list")
+    count = len(ids)
+    estimated_cost = round(count * AI_COST_PER_TRANSACTION, 4)
+    s = await db.settings.find_one({"_id": BANK_SETTINGS_KEY}, {"_id": 0}) or {}
+    monthly_spend = float(s.get("monthly_spend") or 0.0)
+    exceeds_batch = estimated_cost > MAX_AI_COST_PER_BATCH
+    exceeds_monthly = (monthly_spend + estimated_cost) > MAX_AI_MONTHLY_BUDGET
+    return {
+        "transaction_count": count,
+        "estimated_cost_usd": estimated_cost,
+        "max_batch_cost": MAX_AI_COST_PER_BATCH,
+        "monthly_budget": MAX_AI_MONTHLY_BUDGET,
+        "monthly_spend": monthly_spend,
+        "exceeds_batch_limit": exceeds_batch,
+        "exceeds_monthly_budget": exceeds_monthly,
+        "can_proceed": not (exceeds_batch or exceeds_monthly),
+    }
+
+
+@api_router.get("/bank-transactions")
+async def list_bank_transactions(
+    source_document_id: Optional[str] = None,
+    confidence: Optional[str] = None,
+    evidence_status: Optional[str] = None,
+    limit: int = 500,
+):
+    """List bank transactions, filtered. Bounded by `limit` to avoid
+    accidental large dumps."""
+    q: dict = {}
+    if source_document_id:
+        q["source_document_id"] = source_document_id
+    if confidence:
+        q["confidence"] = confidence
+    if evidence_status:
+        q["evidence_status"] = evidence_status
+    rows = await db.bank_transactions.find(q, {"_id": 0}).sort("transaction_date", -1).to_list(min(limit, 5000))
+    return rows
 
 
 @api_router.get("/dashboard/readiness")
