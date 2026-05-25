@@ -7,6 +7,7 @@ import os
 import io
 import logging
 import csv
+import json
 import uuid
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
@@ -807,6 +808,18 @@ async def get_document(doc_id: str):
 async def update_document(doc_id: str, payload: DocumentUpdate):
     update = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
     update["updated_at"] = utc_now_iso()
+    # Stage 5 — any user PATCH on a document is treated as a manual confirmation
+    # so later AI runs don't overwrite their work.
+    update["user_confirmed"] = True
+    # Stage 5 — if the user clears the accountant_review flag and the doc
+    # isn't red-risk, auto-set the document to Complete and drop the
+    # required flag in lockstep.
+    existing = await db.documents.find_one({"id": doc_id}, {"_id": 0})
+    if existing is None:
+        raise HTTPException(404, "Document not found")
+    if update.get("accountant_review") == "No" and existing.get("risk_level") != "Red":
+        update["accountant_review_required"] = False
+        update["status"] = "Complete"
     res = await db.documents.update_one({"id": doc_id}, {"$set": update})
     if res.matched_count == 0:
         raise HTTPException(404, "Document not found")
@@ -816,7 +829,14 @@ async def update_document(doc_id: str, payload: DocumentUpdate):
 @api_router.patch("/documents/{doc_id}/figures")
 async def update_document_figures(doc_id: str, payload: dict):
     figures = payload.get("figures") or []
-    await db.documents.update_one({"id": doc_id}, {"$set": {"headline_figures_json": figures, "updated_at": utc_now_iso()}})
+    await db.documents.update_one(
+        {"id": doc_id},
+        {"$set": {
+            "headline_figures_json": figures,
+            "user_confirmed": True,  # Stage 5 — manual figure edit is a confirmation
+            "updated_at": utc_now_iso(),
+        }},
+    )
     return await db.documents.find_one({"id": doc_id}, {"_id": 0})
 
 
@@ -1047,6 +1067,72 @@ async def dashboard_stats():
         "needs_review": needs_review,
         "missing_critical": missing_critical,
         "missing_total": missing_total,
+        "duplicates": await db.upload_queue.count_documents({"status": "Duplicate?"}),
+    }
+
+
+@api_router.get("/dashboard/readiness")
+async def dashboard_readiness():
+    """Stage 5 — 'Ready for Accountant?' gate.
+
+    READY only if every blocker is zero. Each blocker is returned with a
+    count + a short human-readable reason so the UI can list them.
+    """
+    blockers: list[dict] = []
+
+    # Queue still has unfinished or errored rows
+    bad_q_statuses = ["Error", "Uploading", "Reading", "Classifying", "Queued"]
+    for st in bad_q_statuses:
+        n = await db.upload_queue.count_documents({"status": st})
+        if n:
+            blockers.append({"key": f"queue_{st.lower()}", "count": n,
+                             "reason": f"{n} upload(s) in '{st}' state"})
+
+    # Documents in 00 Inbox
+    inbox_docs = await db.documents.count_documents({"category": "00 Inbox"})
+    if inbox_docs:
+        blockers.append({"key": "inbox_docs", "count": inbox_docs,
+                         "reason": f"{inbox_docs} document(s) still in 00 Inbox"})
+
+    # Accountant-review-required and not yet user-confirmed
+    review_pending = await db.documents.count_documents({
+        "$or": [
+            {"accountant_review_required": True},
+            {"accountant_review": "Yes"},
+        ],
+        "user_confirmed": {"$ne": True},
+    })
+    if review_pending:
+        blockers.append({"key": "review_pending", "count": review_pending,
+                         "reason": f"{review_pending} document(s) flagged for accountant review"})
+
+    # Red-risk documents not yet user-confirmed
+    red_unconfirmed = await db.documents.count_documents({
+        "risk_level": "Red", "user_confirmed": {"$ne": True},
+    })
+    if red_unconfirmed:
+        blockers.append({"key": "red_risk", "count": red_unconfirmed,
+                         "reason": f"{red_unconfirmed} red-risk document(s)"})
+
+    # Unsure tax year
+    unsure_fy = await db.documents.count_documents({"tax_year": "Unsure"})
+    if unsure_fy:
+        blockers.append({"key": "unsure_fy", "count": unsure_fy,
+                         "reason": f"{unsure_fy} document(s) with Unsure tax year"})
+
+    # Critical outstanding missing evidence
+    OPEN_STATUSES = ["Outstanding", "Possible Match", "Accountant Review"]
+    crit_missing = await db.missing_items.count_documents({
+        "status": {"$in": OPEN_STATUSES}, "priority": "Critical",
+    })
+    if crit_missing:
+        blockers.append({"key": "critical_missing", "count": crit_missing,
+                         "reason": f"{crit_missing} critical missing evidence item(s)"})
+
+    return {
+        "ready": len(blockers) == 0,
+        "blockers": blockers,
+        "checked_at": utc_now_iso(),
     }
 
 
@@ -1086,16 +1172,18 @@ async def export_evidence_register():
     async for f in db.figures.find({"document_id": {"$ne": None}}, {"_id": 0}):
         figs_by_doc.setdefault(f["document_id"], []).append(f)
     headers = [
-        "Date uploaded", "Document name", "Original filename", "File type",
+        "Document ID", "SHA256", "Date uploaded", "Document name", "Original filename", "File type",
         "Tax year", "Tax year confidence", "Category", "Category confidence",
         "Document type", "Risk level", "Counterparty",
         "Date range from", "Date range to",
         "Headline figures (AI verified)", "Manual figures",
         "One-line summary", "What it proves",
-        "Accountant review required", "Accountant review reason",
-        "AI model used", "AI cost (USD)",
-        "Google Drive folder", "Google Drive link",
-        "Status", "Notes",
+        "Needs review", "Accountant review reason",
+        "AI model used", "AI cost (USD)", "AI cached",
+        "Storage", "Local path", "Source file available",
+        "Extracted text present",
+        "Google Drive folder", "Google Drive link", "Drive error",
+        "Status", "User confirmed", "Notes", "User notes",
     ]
     rows = []
     for d in docs:
@@ -1106,7 +1194,14 @@ async def export_evidence_register():
             f"{(f.get('label') or f.get('type') or '').strip()}: {f.get('amount','')} ({f.get('confidence','') or 'unspecified'})"
             for f in ai_figs if isinstance(f, dict)
         )
+        local_path = d.get("local_path") or d.get("app_storage_path") or ""
+        try:
+            source_available = bool(local_path) and Path(local_path).exists()
+        except Exception:
+            source_available = False
         rows.append([
+            d.get("id", ""),
+            (d.get("sha256") or "")[:64],
             d.get("created_at", ""),
             d.get("name", ""),
             d.get("original_filename", ""),
@@ -1124,14 +1219,22 @@ async def export_evidence_register():
             manual_text,
             d.get("one_line_summary", "") or "",
             d.get("what_it_proves", "") or "",
-            "Yes" if d.get("accountant_review_required") else d.get("accountant_review", "No"),
+            "Yes" if d.get("accountant_review_required") else (d.get("accountant_review") or "No"),
             d.get("accountant_review_reason", "") or "",
             d.get("final_model_used", "") or d.get("ai_model_used", "") or "",
             f"{(d.get('total_ai_cost_usd') or d.get('ai_cost_usd') or 0):.4f}",
+            "Yes" if d.get("ai_response_cached") else "No",
+            d.get("storage", "") or "",
+            local_path,
+            "Yes" if source_available else "No",
+            "Yes" if (d.get("extracted_text") or "").strip() else "No",
             d.get("drive_folder_name", ""),
             d.get("drive_link", "") or "",
+            d.get("drive_error", "") or "",
             d.get("status", ""),
-            d.get("user_notes", "") or d.get("notes", ""),
+            "Yes" if d.get("user_confirmed") else "No",
+            d.get("notes", "") or "",
+            d.get("user_notes", "") or "",
         ])
     return csv_response(headers, rows, "evidence-register.csv")
 
@@ -1406,6 +1509,123 @@ async def export_accountant_pdf():
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": 'attachment; filename="accountant-summary.pdf"'},
+    )
+
+
+# =================== Stage 5: backup + final ZIP ===================
+
+async def _build_evidence_register_csv() -> bytes:
+    return (await export_evidence_register()).body  # type: ignore[attr-defined]
+
+
+async def _collection_dump(collection, projection=None) -> list[dict]:
+    cursor = collection.find({}, projection or {"_id": 0})
+    return await cursor.to_list(20000)
+
+
+@api_router.get("/reports/backup.json")
+async def export_backup_json():
+    """Full disaster-recovery snapshot — every collection the app owns,
+    plus a generated_at timestamp. Single-user app, no auth."""
+    payload = {
+        "generated_at": utc_now_iso(),
+        "schema_version": "stage5.v1",
+        "documents":     await _collection_dump(db.documents),
+        "figures":       await _collection_dump(db.figures),
+        "missing_items": await _collection_dump(db.missing_items),
+        "upload_queue":  await _collection_dump(db.upload_queue),
+        "ai_response_cache": await _collection_dump(db.ai_response_cache),
+        "ai_errors":     await _collection_dump(db.ai_errors),
+        "drive_config":  await _collection_dump(db.drive_config),
+        # Deliberately exclude `drive_credentials` (OAuth secrets).
+    }
+    body = json.dumps(payload, indent=2, default=str).encode("utf-8")
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="backup.json"'},
+    )
+
+
+def _safe_zip_name(s: str) -> str:
+    """Strip path separators and control chars before using `s` as a zip
+    entry name."""
+    s = (s or "unnamed").replace("\\", "_").replace("/", "_")
+    return "".join(c for c in s if c.isprintable()).strip() or "unnamed"
+
+
+@api_router.get("/reports/final-accountant-pack.zip")
+async def export_final_accountant_pack():
+    """Stage 5 — single ZIP for the accountant containing:
+      • Tax_Evidence_Export/<FY>/<category>/<filename>  (real document files)
+      • evidence-register.csv, missing-evidence.csv, documents-by-category.csv
+      • accountant-summary.txt, accountant-summary.pdf
+      • backup.json
+      • missing-source-files.txt  (only added if some files weren't on disk)
+    """
+    import zipfile
+
+    docs = await db.documents.find({}, {"_id": 0}).sort("created_at", -1).to_list(10000)
+
+    # Generate the individual report bodies by reusing the existing endpoint
+    # functions. Each returns a starlette Response, so we read `.body`.
+    register_resp = await export_evidence_register()
+    missing_resp  = await export_missing()
+    bycat_resp    = await export_by_category()
+    txt_resp      = await export_accountant_summary_txt()
+    pdf_resp      = await export_accountant_pdf()
+    backup_resp   = await export_backup_json()
+
+    buf = io.BytesIO()
+    missing_source: list[str] = []
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Reports at the root
+        zf.writestr("evidence-register.csv",      register_resp.body)
+        zf.writestr("missing-evidence.csv",       missing_resp.body)
+        zf.writestr("documents-by-category.csv",  bycat_resp.body)
+        zf.writestr("accountant-summary.txt",     txt_resp.body)
+        zf.writestr("accountant-summary.pdf",     pdf_resp.body)
+        zf.writestr("backup.json",                backup_resp.body)
+
+        # Documents organised under Tax_Evidence_Export/<FY>/<category>/
+        # using the same canonical folder names the Drive structure uses.
+        root_dir = "Tax_Evidence_Export"
+        for d in docs:
+            fy_raw = d.get("tax_year") or "Unsure"
+            if fy_raw in ("FY2024", "FY2025"):
+                fy_dir = fy_raw
+            elif fy_raw in ("Both", "Historical"):
+                fy_dir = fy_raw
+            else:
+                fy_dir = "UNKNOWN"
+            cat_dir = _safe_zip_name(d.get("drive_folder_name") or d.get("category") or "00 Inbox")
+            local_path = d.get("local_path") or d.get("app_storage_path") or ""
+            src = Path(local_path) if local_path else None
+            arc_name = _safe_zip_name(d.get("vault_filename") or d.get("original_filename") or d.get("name") or d.get("id"))
+            arc_path = f"{root_dir}/{fy_dir}/{cat_dir}/{arc_name}"
+            if src and src.exists():
+                try:
+                    zf.write(str(src), arcname=arc_path)
+                except Exception as e:
+                    missing_source.append(f"{arc_path}\t<read-failed: {e}>")
+            else:
+                missing_source.append(f"{arc_path}\t<source missing: {local_path or '(no local_path stored)'}>")
+
+        # Always include the manifest, even if empty, so the user can verify
+        # nothing was lost in flight.
+        manifest = (
+            "Files listed below were referenced by the evidence register but their source bytes\n"
+            "weren't on disk at export time. Re-upload them to refresh the source copy.\n"
+            "Tab-separated: <intended_arc_path>\\t<reason>\n\n"
+        ) + ("\n".join(missing_source) if missing_source else "(none — all source files exported successfully)")
+        zf.writestr("missing-source-files.txt", manifest)
+
+    body = buf.getvalue()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+    return Response(
+        content=body,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="final-accountant-pack-{stamp}.zip"'},
     )
 
 

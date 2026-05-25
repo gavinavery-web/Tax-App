@@ -487,6 +487,7 @@ async def _process_one(item: dict):
     else:
         # Checkpoint — before AI
         await _raise_if_cancelled(qid)
+        ai_fallback_reason: str | None = None  # Stage 5: track the reason for any forced-Inbox routing
         async with _AI_SEM:
             # Hard 60s timeout — if AI hangs the whole queue would otherwise
             # stall. Cooperative cancellation also checked after the call.
@@ -497,18 +498,11 @@ async def _process_one(item: dict):
                 )
             except asyncio.TimeoutError:
                 logger.warning(f"AI classification timed out (>{AI_TIMEOUT_SECONDS}s) for {filename}")
-                # Hard fail with stable code; staging file is left intact so
-                # the user can use Retry to re-queue.
-                await _db.upload_queue.update_one(
-                    {"id": qid},
-                    {"$set": {
-                        "status": "Error",
-                        "error": ERROR_MESSAGES[ErrorCode.AI_TIMEOUT],
-                        "error_code": ErrorCode.AI_TIMEOUT,
-                        "completed_at": utc_now_iso(),
-                    }},
-                )
-                return
+                # Stage 5 — AI failure must NEVER block ingestion. We still
+                # file the document to 00 Inbox with Red risk + accountant
+                # review required so the user can act on it.
+                ai_fallback_reason = ERROR_MESSAGES[ErrorCode.AI_TIMEOUT]
+                result = {"ok": False, "error": ai_fallback_reason}
         # Checkpoint — after AI
         await _raise_if_cancelled(qid)
         if not result.get("ok") or not result.get("analysis"):
@@ -519,20 +513,12 @@ async def _process_one(item: dict):
                 {"$set": {"key": _singleton_key, "message": ai_err, "timestamp": utc_now_iso(), "filename": filename}},
                 upsert=True,
             )
-            # Rate-limit / timeout: hard-fail the row so the user can retry,
-            # don't insert a document. Other AI errors: file to Inbox for
-            # manual review (existing behaviour).
-            if ai_code in (ErrorCode.AI_RATE_LIMIT, ErrorCode.AI_TIMEOUT):
-                await _db.upload_queue.update_one(
-                    {"id": qid},
-                    {"$set": {
-                        "status": "Error",
-                        "error": ERROR_MESSAGES[ai_code],
-                        "error_code": ai_code,
-                        "completed_at": utc_now_iso(),
-                    }},
-                )
-                return
+            # Stage 5 — ALL AI failures (timeout, rate-limit, generic) now
+            # save the document to Inbox/Red/Accountant-review. The user
+            # facing reason is the friendly message; raw error stays in
+            # logs only.
+            user_reason = ERROR_MESSAGES.get(ai_code, "AI failed or unavailable. Manual review required.")
+            ai_fallback_reason = ai_fallback_reason or user_reason
             # File the document to 00 Inbox with no analysis
             analysis = {
                 "document_type": "Unclassified",
@@ -546,8 +532,9 @@ async def _process_one(item: dict):
                 "one_line_summary": "AI classification failed — please review",
                 "what_it_proves": "",
                 "headline_figures": [],
+                "risk_level": "Red",
                 "accountant_review_required": True,
-                "accountant_review_reason": "AI classification failed",
+                "accountant_review_reason": user_reason,
                 "suggested_filename": None,
             }
         else:
@@ -572,20 +559,24 @@ async def _process_one(item: dict):
             "claude_cost_usd": result.get("claude_cost_usd", 0.0),
             "total_ai_cost_usd": result.get("total_ai_cost_usd", result.get("cost_usd", 0.0)),
             "error": result.get("error"),
+            "ai_fallback_reason": ai_fallback_reason,
         }
 
-    # Stage 4.5 — extraction-failure flagging: AI was best-effort, but if we
-    # have no usable text, force accountant review and force Inbox routing,
-    # and downstream we'll skip auto-matching to missing evidence.
+    # Stage 5 — unreadable / extraction failure → hard force Inbox/Red/Unsure.
+    # Stage 4.5 only downgraded confidence; this fully enforces the contract.
     if extraction_failed:
         analysis = dict(analysis)
+        analysis["category"] = "00 Inbox"
+        analysis["category_confidence"] = "Unsure"
+        analysis["tax_year"] = "Unsure"
+        analysis["tax_year_confidence"] = "Unsure"
+        analysis["risk_level"] = "Red"
         analysis["accountant_review_required"] = True
         prev_reason = analysis.get("accountant_review_reason") or ""
-        ext_reason = "Text extraction failed or limited text extracted."
+        ext_reason = "No reliable text could be extracted. Manual review required."
         analysis["accountant_review_reason"] = (
             f"{prev_reason} | {ext_reason}".strip(" |") if prev_reason else ext_reason
         )
-        analysis["category_confidence"] = "Unsure"
 
     # Step 6 — determine target folder
     cat = analysis.get("category") or "Other"

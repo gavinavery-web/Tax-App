@@ -70,6 +70,21 @@ Single private user (the owner). Single-user, no auth. Australian taxpayer with 
   - Global keyboard shortcuts in `Layout.jsx`: `Ctrl/⌘+U` → /register, `Ctrl/⌘+M` → /missing-evidence, `Ctrl/⌘+Shift+D` → / (Shift avoids hijacking the browser bookmark binding). Input/textarea focus is respected.
   - Sidebar shows `⌘U` / `⌘M` / `⌘⇧D` hint chips next to nav items.
   - New `HelpTip` component (shadcn `Tooltip` wrapper) applied to the *Confidence* / *Review* / *AI $* column headers on the Evidence Register.
+- **Stage 5 — Final corrections (Feb 25, 2026)**:
+  - **AI-failure fallback contract enforced**: every AI failure (timeout, rate-limit, malformed JSON, both-models-failed) now STILL inserts a document with `category="00 Inbox"`, `tax_year="Unsure"`, `risk_level="Red"`, `accountant_review_required=True`, `status="Accountant review"`, queue row=`Inbox` (not Error). Document survives.
+  - **Unreadable file contract enforced**: extraction failure / <10 chars → same Inbox/Red/Unsure profile. Auto-match to missing evidence is skipped.
+  - **New `GET /api/reports/final-accountant-pack.zip`** — bundles every report (CSVs, TXT, PDF) + `backup.json` + organised document files under `Tax_Evidence_Export/<FY>/<category>/`. Files with missing source bytes are listed in `missing-source-files.txt` (no crash).
+  - **New `GET /api/reports/backup.json`** — full disaster-recovery snapshot (documents, figures, missing_items, upload_queue, ai_response_cache, ai_errors, drive_config). Excludes OAuth secrets.
+  - **New `GET /api/dashboard/readiness`** — "Ready for Accountant?" gate. Blockers: queue errors, Inbox docs, accountant-review-pending, red-risk unconfirmed, Unsure FY, critical missing evidence. Dashboard renders this as a coloured banner with blocker list + Download/Backup buttons.
+  - **Evidence Register CSV extended** to 35 columns including: Document ID, SHA256, Storage, Local path, Source file available, Risk level, Needs review, AI cached, User confirmed, Drive error, Extracted text present.
+  - **PATCH /documents/{id}** now sets `user_confirmed=True` + `updated_at=now` on every edit. Clearing `accountant_review` to "No" on a non-red doc auto-sets `accountant_review_required=False` + `status="Complete"`.
+  - **PATCH /documents/{id}/figures** also sets `user_confirmed=True`.
+  - **Tax year scope locked** in `frontend/src/utils/taxYear.js` to `FY2024 | FY2025 | Both | Historical | Unsure`. FY2026+ no longer exposed.
+  - **Backend helpers added** in `/app/backend/financial_helpers.py`: `get_australian_financial_year(date)` (FY2024 = 1 Jul 2023 → 30 Jun 2024), `normalise_fy()`, `parse_money_to_cents()`, `cents_to_money_str()`.
+  - **Dashboard stats** now also returns `duplicates` (upload_queue rows in Duplicate? state).
+  - **Stripe removed** from requirements.txt (was unused).
+  - **Tests**: 25-case `tests/test_stage5_final.py` covers FY boundary dates, money helper, empty file → FILE_EMPTY, unreadable file → Inbox/Red survives, duplicate hash detection + renamed file + dashboard count, manual edit → user_confirmed, accountant-review-cleared → Complete, evidence CSV required columns, backup JSON shape + no OAuth secrets, final ZIP structure + required entries, readiness shape + inbox-blocker correctness, tax_years API locked. **Full suite: 65 passed / 0 failed / 1 skipped.**
+  - **Live proof of AI-failure fallback** (curl test): unreadable PDF uploaded → queue row terminates as `Inbox` (not Error), document saved with `category=00 Inbox / risk_level=Red / tax_year=Unsure / accountant_review_required=True / status="Accountant review"`. ✅
 - **Stage 4 — Production hardening (Feb 25, 2026)**:
   - New `/app/backend/error_codes.py` — `ErrorCode` enum + `ERROR_MESSAGES` map + `classify_ai_error()` / `classify_drive_error()` helpers; queue rows now carry a stable `error_code` field.
   - Hard 100 MB file cap (`MAX_UPLOAD_BYTES`); oversize and 0-byte uploads land directly in `Error` state with `FILE_TOO_LARGE` / `FILE_EMPTY` codes — no worker time wasted.

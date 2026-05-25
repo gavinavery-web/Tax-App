@@ -1,8 +1,16 @@
 import React from "react";
 import { API } from "../lib/api";
-import { FileDown, FileText, FolderTree, AlertOctagon, FileType2 } from "lucide-react";
+import { FileDown, FileText, FolderTree, AlertOctagon, FileType2, Package, HardDrive } from "lucide-react";
 
 const items = [
+  {
+    key: "final-pack",
+    title: "Final Accountant Pack (ZIP)",
+    desc: "Single archive: organised document files by FY/category + all CSVs + summary PDF/TXT + disaster-recovery backup. One link to hand to your accountant.",
+    url: `${API}/reports/final-accountant-pack.zip`,
+    format: "ZIP",
+    icon: Package,
+  },
   {
     key: "register",
     title: "Evidence Register",
@@ -42,6 +50,14 @@ const items = [
     url: `${API}/reports/documents-by-category.csv`,
     format: "CSV",
     icon: FolderTree,
+  },
+  {
+    key: "backup",
+    title: "Backup (JSON)",
+    desc: "Full disaster-recovery snapshot: every document, figure, AI cache, missing-evidence item, and upload-queue row. Critical before relying on the app for real work.",
+    url: `${API}/reports/backup.json`,
+    format: "JSON",
+    icon: HardDrive,
   },
 ];
 

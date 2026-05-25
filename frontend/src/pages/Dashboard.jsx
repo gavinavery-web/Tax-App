@@ -1,26 +1,30 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { StatusPill } from "../components/StatusPill";
-import { Cloud, CloudOff, AlertCircle, Banknote, FileStack, ShieldCheck, AlertTriangle as AlertTri, Upload as UploadIcon } from "lucide-react";
+import { Cloud, CloudOff, AlertCircle, Banknote, FileStack, ShieldCheck, AlertTriangle as AlertTri, Upload as UploadIcon, CheckCircle2, PackageOpen } from "lucide-react";
 import { fmtAUD } from "../lib/constants";
 import { Link } from "react-router-dom";
+import { API } from "../lib/api";
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const [drive, setDrive] = useState(null);
   const [paygFigures, setPaygFigures] = useState([]);
   const [stats, setStats] = useState(null);
+  const [readiness, setReadiness] = useState(null);
 
   const load = async () => {
-    const [d, ds, pf, st] = await Promise.all([
+    const [d, ds, pf, st, rd] = await Promise.all([
       api.get("/dashboard"),
       api.get("/drive/status"),
       api.get("/figures", { params: { } }),
       api.get("/dashboard/stats"),
+      api.get("/dashboard/readiness"),
     ]);
     setData(d.data); setDrive(ds.data);
     setPaygFigures(pf.data.filter((f) => f.figure_type === "payg_income"));
     setStats(st.data);
+    setReadiness(rd.data);
   };
 
   useEffect(() => { load(); }, []);
@@ -83,6 +87,69 @@ export default function Dashboard() {
               <div className="text-[11px] text-zinc-500 mt-0.5">{stats.missing_total} outstanding total</div>
             </div>
           </Link>
+        </div>
+      )}
+
+      {/* Stage 5 — Ready for Accountant? gate */}
+      {readiness && (
+        <div
+          className={`border rounded-sm p-4 mb-5 ${
+            readiness.ready
+              ? "bg-green-50 border-green-200"
+              : "bg-amber-50 border-amber-200"
+          }`}
+          data-testid="readiness-card"
+        >
+          <div className="flex items-start gap-3">
+            {readiness.ready ? (
+              <CheckCircle2 className="w-5 h-5 text-green-700 mt-0.5 flex-shrink-0" />
+            ) : (
+              <AlertTri className="w-5 h-5 text-amber-700 mt-0.5 flex-shrink-0" />
+            )}
+            <div className="flex-1">
+              <div className="text-sm font-semibold" style={{ fontFamily: "Chivo" }} data-testid="readiness-headline">
+                {readiness.ready ? "Ready for accountant" : "Not ready yet — review required"}
+              </div>
+              <div className="text-[11px] text-zinc-600 mt-0.5">
+                {readiness.ready
+                  ? "All checks passed. You can hand the Final Accountant Pack to your accountant."
+                  : "Resolve each blocker below, then re-check from here."}
+              </div>
+              {!readiness.ready && readiness.blockers?.length > 0 && (
+                <ul className="mt-2 space-y-1 text-xs text-zinc-700" data-testid="readiness-blockers">
+                  {readiness.blockers.map((b) => (
+                    <li key={b.key} className="flex items-center gap-2">
+                      <span className="mono text-[11px] text-amber-700 w-6 text-right">{b.count}</span>
+                      <span>·</span>
+                      <span>{b.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="mt-3 flex gap-2">
+                <a
+                  href={`${API}/reports/final-accountant-pack.zip`}
+                  className={`inline-flex items-center gap-1 rounded-sm text-xs px-3 py-1.5 border ${
+                    readiness.ready
+                      ? "bg-zinc-950 text-white border-zinc-950 hover:bg-zinc-800"
+                      : "bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-50"
+                  }`}
+                  data-testid="final-pack-link"
+                  download
+                >
+                  <PackageOpen className="w-3.5 h-3.5" /> Download Final Accountant Pack (ZIP)
+                </a>
+                <a
+                  href={`${API}/reports/backup.json`}
+                  className="inline-flex items-center gap-1 rounded-sm text-xs px-3 py-1.5 border bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-50"
+                  data-testid="backup-link"
+                  download
+                >
+                  Backup (JSON)
+                </a>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
