@@ -85,6 +85,15 @@ Single private user (the owner). Single-user, no auth. Australian taxpayer with 
   - **Stripe removed** from requirements.txt (was unused).
   - **Tests**: 25-case `tests/test_stage5_final.py` covers FY boundary dates, money helper, empty file → FILE_EMPTY, unreadable file → Inbox/Red survives, duplicate hash detection + renamed file + dashboard count, manual edit → user_confirmed, accountant-review-cleared → Complete, evidence CSV required columns, backup JSON shape + no OAuth secrets, final ZIP structure + required entries, readiness shape + inbox-blocker correctness, tax_years API locked. **Full suite: 65 passed / 0 failed / 1 skipped.**
   - **Live proof of AI-failure fallback** (curl test): unreadable PDF uploaded → queue row terminates as `Inbox` (not Error), document saved with `category=00 Inbox / risk_level=Red / tax_year=Unsure / accountant_review_required=True / status="Accountant review"`. ✅
+
+## Stage 7 — Phase 1 Foundation (Feb 25, 2026)
+- New migrations dir `/app/backend/migrations/`:
+  - `create_stage7_collections.py` — creates `bank_transactions`, `tax_return_items`, `properties` collections + indexes. Seeds Heathridge + Waggrakine properties (ids `prop-heathridge`, `prop-waggrakine`). Idempotent.
+  - `migrate_to_stage7.py` — adds new fields to `documents` (`is_deleted`, `deleted_at`, `deleted_reason`, `evidence_status="used"`, `used_in_claims_count=0`, `is_bank_statement`, `transactions_extracted_count`, `transactions_analyzed_by_ai`, `transaction_ai_cost_usd`) and Stage 7 tracking fields to `missing_items` (`satisfied_by_document_id`, `satisfied_at`, `satisfied_method`). Idempotent.
+  - `__init__.py` so it's also importable as a package.
+- New Pydantic models in `server.py`: `BankTransaction`, `TaxReturnItem`, `PropertyUsePeriod`, `Property`. No endpoints yet (Phase 2 territory).
+- **Deliberate deviation from spec**: did NOT remap Stage 4.5 missing-evidence status vocabulary (`Outstanding/Possible Match/Received/Not applicable/Accountant Review`) to Stage 7's (`open/matched_by_upload/not_applicable`). The legacy vocab is referenced by ~40 tests, the readiness gate, every export, and 5 frontend pages. Stage 7 mapping documented as `ST7_STATUS_PROJECTION` in `migrate_to_stage7.py` and can be applied as a read-time derivation in Phase 2.
+- Verified: 21/21 documents migrated, 30/30 missing_items tracking fields added, 2 properties seeded, idempotency confirmed, all stage 1–6 features still pass (pytest 65/1, all smoke endpoints 200).
 - **Stage 4 — Production hardening (Feb 25, 2026)**:
   - New `/app/backend/error_codes.py` — `ErrorCode` enum + `ERROR_MESSAGES` map + `classify_ai_error()` / `classify_drive_error()` helpers; queue rows now carry a stable `error_code` field.
   - Hard 100 MB file cap (`MAX_UPLOAD_BYTES`); oversize and 0-byte uploads land directly in `Error` state with `FILE_TOO_LARGE` / `FILE_EMPTY` codes — no worker time wasted.

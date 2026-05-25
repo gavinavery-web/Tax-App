@@ -259,6 +259,131 @@ class MissingItemUpdate(BaseModel):
     notes: Optional[str] = None
 
 
+# =================== Stage 7 models (Tax Return Intelligence) ===================
+# These models back the new collections created in
+# /app/backend/migrations/create_stage7_collections.py. No endpoints use
+# them yet — Phase 1 is foundation only. Endpoints land in Phase 2.
+
+class BankTransaction(BaseModel):
+    """Single transaction extracted from a bank statement document."""
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    source_document_id: str
+    source_filename: str
+    bank_name: str
+    account_number_masked: str
+    statement_period_from: Optional[str] = None
+    statement_period_to: Optional[str] = None
+    page_number: Optional[int] = None
+
+    # Transaction details
+    transaction_date: str
+    description_raw: str
+    description_cleaned: str
+    amount_cents: int                      # always positive
+    debit_credit: str                      # "debit" | "credit"
+    balance_cents: Optional[int] = None
+
+    # Classification
+    merchant_detected: Optional[str] = None
+    category_suggested: Optional[str] = None
+    tax_section_suggested: Optional[str] = None
+    property_match: Optional[str] = None
+    use_period_match: Optional[str] = None
+
+    # Risk / review
+    confidence: str = "Unsure"
+    risk_level: str = "Amber"
+    accountant_review_required: bool = False
+    review_reason: Optional[str] = None
+
+    # User control
+    evidence_status: str = "candidate"
+    user_confirmed: bool = False
+    user_notes: str = ""
+    used_in_return: bool = False
+
+    # AI metadata
+    extraction_method: str                 # "csv_parser" | "table_parser" | "line_parser" | "ai"
+    classification_method: str             # "rules" | "ai" | "manual"
+    ai_cost_usd: float = 0.0
+
+    created_at: str = Field(default_factory=utc_now_iso)
+    updated_at: str = Field(default_factory=utc_now_iso)
+
+
+class TaxReturnItem(BaseModel):
+    """A single line on a tax return — income, deduction, offset, or info-only."""
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    tax_year: str
+    section: str                           # "salary_wages" | "rental_income" | …
+    category: str
+    subcategory: Optional[str] = None
+
+    # Claim
+    description: str
+    amount_cents: int
+    income_or_deduction: str               # "income" | "deduction" | "offset" | "information_only"
+
+    # Audit trail
+    source_type: str                       # "document" | "bank_transaction" | "manual_entry"
+    source_document_id: Optional[str] = None
+    source_bank_transaction_id: Optional[str] = None
+    source_manual_entry_id: Optional[str] = None
+    source_filename: Optional[str] = None
+    source_drive_link: Optional[str] = None
+    source_page_number: Optional[int] = None
+    source_quote: Optional[str] = None
+
+    # Property linkage
+    property_id: Optional[str] = None
+    property_use_period: Optional[str] = None
+
+    # Risk / review
+    confidence: str = "Unsure"
+    risk_level: str = "Amber"
+    accountant_review_required: bool = False
+    review_reason: Optional[str] = None
+
+    # User control
+    evidence_status: str = "candidate"
+    user_confirmed: bool = False
+    user_notes: str = ""
+    manual_override: bool = False
+
+    # AI metadata
+    ai_model_used: Optional[str] = None
+    ai_cost_usd: float = 0.0
+
+    created_at: str = Field(default_factory=utc_now_iso)
+    updated_at: str = Field(default_factory=utc_now_iso)
+
+
+class PropertyUsePeriod(BaseModel):
+    """One use period within a property (e.g. owner-occupied → rental switch)."""
+    model_config = ConfigDict(extra="ignore")
+    period_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    date_from: str
+    date_to: Optional[str] = None
+    use_type: str                          # "owner_occupied" | "rental" | "airbnb" | "mixed"
+    notes: str = ""
+
+
+class Property(BaseModel):
+    """A property the user owns / uses for tax purposes."""
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    property_name: str
+    address: str
+    use_periods: List[PropertyUsePeriod] = []
+    created_at: str = Field(default_factory=utc_now_iso)
+    updated_at: str = Field(default_factory=utc_now_iso)
+
+
 # =================== Drive helpers ===================
 
 async def get_drive_credentials_doc():
