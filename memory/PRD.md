@@ -116,6 +116,26 @@ Single private user (the owner). Single-user, no auth. Australian taxpayer with 
   - `UploadQueue.jsx` rewritten to render `error_code` → action mapping: **Retry** for transient errors, **Retry (wait 60s)** countdown for `AI_RATE_LIMIT`, **Reconnect Drive** link for `DRIVE_DISCONNECTED`, banner showing total error count.
   - **Note**: the spec's wholesale `upload_pipeline.py` replacement was rejected — it contained stub Drive code (`drive_file_id = "..."`) and assumed an auth layer this single-user app doesn't have. Stage 4 hardening was integrated surgically into the existing working pipeline instead.
 
+## Stage 7 Phase 3 — Tax Builder + Deletion + Properties (Feb 28, 2026)
+- New `/app/backend/deletion_manager.py` — soft delete / restore / permanent delete with safety checks. Permanent delete refuses to run unless the doc is in the rubbish bin AND has zero `used_in_claims_count` AND no live `tax_return_items` referencing it. Drive copy is preserved on permanent delete (existing hard-delete endpoint `DELETE /api/documents/{doc_id}` still wipes Drive — left untouched).
+- New `/app/backend/property_manager.py` — properties CRUD + embedded use-periods. `add_use_period` validates `use_type` ∈ {main_residence, rental, airbnb, renovation, vacant, mixed} and ISO dates. `get_use_period_for_date` resolves overlapping periods with deterministic priority (main_residence > mixed > renovation > rental > airbnb > vacant).
+- `/app/backend/tax_return_builder.py` already in place from Stage 7 Phase 2 — wired into new endpoints below. Source linking & `used_in_claims_count` are maintained atomically via `find_one_and_update`.
+- New endpoints in `server.py`:
+  - `GET /api/tax-years` — FY2024 + FY2025 summaries (sections, totals, review count).
+  - `GET /api/tax-years/{tax_year}` — full breakdown for a given year.
+  - `GET /api/tax-return-items` — filterable by tax_year/section.
+  - `POST /api/tax-return-items` — manual claim creation; validates section against an allowlist, increments source-doc usage count if `source_document_id` supplied (404 if it doesn't exist).
+  - `DELETE /api/tax-return-items/{item_id}` — removes claim, decrements doc usage, releases `used_in_return` flag on any linked bank transaction.
+  - `POST /api/bank-transactions/{tx_id}/use-in-return` — promote a Confirmed/Likely transaction into a tax-return item (idempotent).
+  - `POST /api/documents/{doc_id}/delete` — soft delete (rubbish bin).
+  - `POST /api/documents/{doc_id}/restore` — restore from rubbish bin.
+  - `DELETE /api/documents/{doc_id}/permanent` — permanent delete (409 if claims exist or not in bin).
+  - `GET /api/rubbish-bin` — soft-deleted docs.
+  - `GET /api/properties`, `POST /api/properties` (409 on duplicate name), `GET /api/properties/{id}`, `POST /api/properties/{id}/periods`, `DELETE /api/properties/{id}/periods/{period_id}`.
+- `GET /api/documents` now hides `is_deleted=True` by default; `?include_deleted=true` opts back in.
+- Tests: `backend/tests/test_stage7_phase3.py` (10 cases). Full suite: **96 passed / 0 failed / 2 skipped**.
+- **Deliberate deviations from spec**: all filters use string `"id"` (not `_id`/ObjectId) — matches existing codebase convention; timestamps are ISO-8601 UTC strings (not naive `datetime.now()`); existing hard-delete `DELETE /api/documents/{doc_id}` left intact to avoid frontend regressions; permanent-delete preserves Drive file per spec.
+
 ## Backlog / deferred
 ### P1 — Stage 2 candidates
 - AI extraction of figures from uploaded PDFs/images (currently manual only — by Stage 1 design)

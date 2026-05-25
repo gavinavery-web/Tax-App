@@ -911,6 +911,7 @@ async def list_documents(
     tax_year: Optional[str] = None,
     status: Optional[str] = None,
     accountant_review: Optional[str] = None,
+    include_deleted: bool = False,
 ):
     q = {}
     if category:
@@ -924,6 +925,9 @@ async def list_documents(
         q["status"] = status
     if accountant_review:
         q["accountant_review"] = accountant_review
+    # Stage 7 Phase 3 — hide rubbish-bin rows by default.
+    if not include_deleted:
+        q["is_deleted"] = {"$ne": True}
     cursor = db.documents.find(q, {"_id": 0}).sort("created_at", -1)
     return await cursor.to_list(2000)
 
@@ -1849,6 +1853,239 @@ async def export_final_accountant_pack():
 @api_router.get("/")
 async def root():
     return {"app": "Tax Evidence Vault", "stage": 1}
+
+
+# =================== Stage 7 Phase 3 — Tax Return Items ===================
+
+# `tax_return_builder` lives in /app/backend/tax_return_builder.py and was
+# created in Stage 7 Phase 2. We import lazily to keep startup snappy.
+from tax_return_builder import (  # noqa: E402
+    create_manual_tax_return_item,
+    create_tax_return_item_from_transaction,
+    get_tax_year_summary,
+)
+import deletion_manager as _del  # noqa: E402
+import property_manager as _prop  # noqa: E402
+
+
+# Tax sections accepted by the manual-entry endpoint. The list is the
+# union of TAX_SECTION_MAPPING.values() in tax_return_builder.py plus
+# "other_deductions" so the user can always fall through to a catch-all.
+VALID_TAX_SECTIONS = {
+    "salary_wages", "allowances", "interest", "dividends", "rental_income",
+    "work_related_car", "work_related_travel", "tools_equipment",
+    "union_fees", "donations", "rental_deductions", "other_deductions",
+}
+
+
+@api_router.get("/tax-years")
+async def list_tax_year_summaries():
+    """Summary across the FY2024 + FY2025 returns."""
+    out = []
+    for y in ("FY2024", "FY2025"):
+        out.append(await get_tax_year_summary(db, y))
+    return out
+
+
+@api_router.get("/tax-years/{tax_year}")
+async def get_tax_year_breakdown(tax_year: str):
+    return await get_tax_year_summary(db, tax_year)
+
+
+@api_router.get("/tax-return-items")
+async def list_tax_return_items(
+    tax_year: Optional[str] = None,
+    section: Optional[str] = None,
+):
+    q: dict = {"evidence_status": {"$ne": "excluded"}}
+    if tax_year:
+        q["tax_year"] = tax_year
+    if section:
+        q["section"] = section
+    return await db.tax_return_items.find(q, {"_id": 0}).sort("created_at", -1).to_list(5000)
+
+
+@api_router.post("/tax-return-items")
+async def create_tax_item(payload: dict):
+    """Create a manual tax-return claim. Required: tax_year, section,
+    amount_cents, description, income_or_deduction.
+    Optional: source_document_id, notes."""
+    for f in ("tax_year", "section", "amount_cents", "description", "income_or_deduction"):
+        if payload.get(f) in (None, ""):
+            raise HTTPException(400, f"missing required field: {f}")
+    if payload["income_or_deduction"] not in ("income", "deduction"):
+        raise HTTPException(400, "income_or_deduction must be 'income' or 'deduction'")
+    if payload["section"] not in VALID_TAX_SECTIONS:
+        raise HTTPException(400, f"invalid section. Valid: {sorted(VALID_TAX_SECTIONS)}")
+    try:
+        amount_cents = int(payload["amount_cents"])
+    except (TypeError, ValueError):
+        raise HTTPException(400, "amount_cents must be an integer")
+
+    # Validate source doc exists if provided
+    src_id = payload.get("source_document_id") or None
+    if src_id:
+        src = await db.documents.find_one({"id": src_id}, {"_id": 0})
+        if not src:
+            raise HTTPException(404, f"source_document_id '{src_id}' not found")
+
+    item_id = await create_manual_tax_return_item(
+        db,
+        tax_year=payload["tax_year"],
+        section=payload["section"],
+        amount_cents=amount_cents,
+        description=payload["description"],
+        income_or_deduction=payload["income_or_deduction"],
+        source_document_id=src_id,
+        notes=payload.get("notes", ""),
+    )
+    return {"success": True, "item_id": item_id}
+
+
+@api_router.delete("/tax-return-items/{item_id}")
+async def delete_tax_item(item_id: str):
+    """Hard-delete a tax-return claim and decrement the source-doc usage
+    counter so the document can be soft-deleted if no other claims hold it."""
+    item = await db.tax_return_items.find_one({"id": item_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(404, "tax return item not found")
+    await db.tax_return_items.delete_one({"id": item_id})
+    src_id = item.get("source_document_id")
+    if src_id:
+        from tax_return_builder import increment_document_usage
+        await increment_document_usage(db, src_id, delta=-1)
+    # If the claim came from a bank transaction, release the "used" flag.
+    tx_id = item.get("source_bank_transaction_id")
+    if tx_id:
+        await db.bank_transactions.update_one(
+            {"id": tx_id},
+            {"$set": {"used_in_return": False, "updated_at": utc_now_iso()}},
+        )
+    return {"success": True}
+
+
+@api_router.post("/bank-transactions/{tx_id}/use-in-return")
+async def use_transaction_in_return(tx_id: str):
+    """Promote a bank transaction into a tax_return_item (uses the
+    transaction's existing classification). Idempotent: returns the
+    existing item id if already used."""
+    tx = await db.bank_transactions.find_one({"id": tx_id}, {"_id": 0})
+    if not tx:
+        raise HTTPException(404, "bank transaction not found")
+    if tx.get("used_in_return"):
+        existing = await db.tax_return_items.find_one(
+            {"source_bank_transaction_id": tx_id}, {"_id": 0},
+        )
+        return {"success": True, "item_id": existing and existing.get("id"), "already": True}
+    item_id = await create_tax_return_item_from_transaction(db, tx)
+    if item_id is None:
+        raise HTTPException(
+            400,
+            "transaction is not eligible (must be Confirmed/Likely and not flagged private)",
+        )
+    return {"success": True, "item_id": item_id}
+
+
+# =================== Stage 7 Phase 3 — Deletion / Rubbish Bin ===================
+
+@api_router.post("/documents/{doc_id}/delete")
+async def soft_delete_document_endpoint(doc_id: str, payload: dict):
+    """Move document to the rubbish bin. Drive copy preserved."""
+    ok = await _del.soft_delete_document(
+        db, document_id=doc_id,
+        reason=(payload or {}).get("reason", "User deleted"),
+        user="user",
+    )
+    if not ok:
+        raise HTTPException(404, "Document not found or already deleted")
+    return {"success": True}
+
+
+@api_router.post("/documents/{doc_id}/restore")
+async def restore_document_endpoint(doc_id: str):
+    ok = await _del.restore_document(db, doc_id)
+    if not ok:
+        raise HTTPException(404, "Document not found or not deleted")
+    return {"success": True}
+
+
+@api_router.delete("/documents/{doc_id}/permanent")
+async def permanent_delete_document_endpoint(doc_id: str):
+    """Permanently remove from DB + local staging. Drive file is preserved.
+    Blocks if the doc is still referenced by any tax_return_item."""
+    result = await _del.permanent_delete_document(db, doc_id, user="user")
+    if not result.get("success"):
+        # 409 Conflict if a referential check failed, 404 otherwise.
+        err = result.get("error", "")
+        status = 409 if ("referenced" in err or "rubbish bin first" in err) else 404
+        raise HTTPException(status, err)
+    return result
+
+
+@api_router.get("/rubbish-bin")
+async def list_rubbish_bin():
+    """Soft-deleted documents."""
+    cursor = db.documents.find({"is_deleted": True}, {"_id": 0}).sort("deleted_at", -1)
+    return await cursor.to_list(2000)
+
+
+# =================== Stage 7 Phase 3 — Properties ===================
+
+@api_router.get("/properties")
+async def list_properties_endpoint():
+    return await _prop.get_properties(db)
+
+
+@api_router.post("/properties")
+async def create_property_endpoint(payload: dict):
+    name = (payload or {}).get("property_name")
+    address = (payload or {}).get("address", "")
+    if not name:
+        raise HTTPException(400, "property_name is required")
+    # Reject duplicates (the unique index would 11000 — translate that
+    # into a clean 409 for the UI).
+    exists = await db.properties.find_one({"property_name": name}, {"_id": 0})
+    if exists:
+        raise HTTPException(409, f"property '{name}' already exists")
+    new_id = await _prop.add_property(db, property_name=name, address=address)
+    return {"success": True, "property_id": new_id}
+
+
+@api_router.get("/properties/{property_id}")
+async def get_property_endpoint(property_id: str):
+    prop = await _prop.get_property(db, property_id)
+    if not prop:
+        raise HTTPException(404, "Property not found")
+    return prop
+
+
+@api_router.post("/properties/{property_id}/periods")
+async def add_property_period_endpoint(property_id: str, payload: dict):
+    if not payload.get("date_from") or not payload.get("use_type"):
+        raise HTTPException(400, "date_from and use_type are required")
+    # Validate property exists so we return 404 (not silent 200/false).
+    prop = await _prop.get_property(db, property_id)
+    if not prop:
+        raise HTTPException(404, "Property not found")
+    try:
+        ok = await _prop.add_use_period(
+            db, property_id,
+            date_from=payload["date_from"],
+            date_to=payload.get("date_to"),
+            use_type=payload["use_type"],
+            notes=payload.get("notes", ""),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"success": ok}
+
+
+@api_router.delete("/properties/{property_id}/periods/{period_id}")
+async def delete_property_period_endpoint(property_id: str, period_id: str):
+    ok = await _prop.remove_use_period(db, property_id, period_id)
+    if not ok:
+        raise HTTPException(404, "Property or period not found")
+    return {"success": True}
 
 
 app.include_router(api_router)
