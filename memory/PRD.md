@@ -136,6 +136,14 @@ Single private user (the owner). Single-user, no auth. Australian taxpayer with 
 - Tests: `backend/tests/test_stage7_phase3.py` (10 cases). Full suite: **96 passed / 0 failed / 2 skipped**.
 - **Deliberate deviations from spec**: all filters use string `"id"` (not `_id`/ObjectId) — matches existing codebase convention; timestamps are ISO-8601 UTC strings (not naive `datetime.now()`); existing hard-delete `DELETE /api/documents/{doc_id}` left intact to avoid frontend regressions; permanent-delete preserves Drive file per spec.
 
+## Stage 7 Phase 3 — Frontend UI (Feb 28, 2026)
+- New pages: `TaxYears.jsx` (FY summary cards), `TaxYearBreakdown.jsx` (collapsible sections with per-item remove), `BankTransactions.jsx` (filters + "Add to return" promotion), `RubbishBin.jsx` (restore + permanent delete), `Properties.jsx` (inline add-period form + remove), `ManualEntry.jsx` (form with type-aware section dropdown).
+- All wired into `App.js` routes inside the existing `<Layout />` outlet. `Layout.jsx` sidebar extended with 4 new entries: Tax Years, Bank Transactions, Properties, Rubbish Bin.
+- All pages use `import { api } from "../lib/api"` (axios + REACT_APP_BACKEND_URL) — no hardcoded URLs. All interactive elements carry kebab-case `data-testid`.
+- Style matches existing pages: dense Chivo headings, `mono` mini-labels, shadcn Button/Select/Input/Textarea, sonner toasts.
+- **Spec adaptations**: `_id` → `id` (codebase convention); `alert()`/`fetch()` → sonner `toast`/axios `api`; FY2026 removed (only FY2024 + FY2025 supported); shadcn components used in place of raw Tailwind.
+- Tested by testing_agent_v3_fork: **9/9 e2e flows pass, 0 bugs, 0 action items.**
+
 ## Backlog / deferred
 ### P1 — Stage 2 candidates
 - AI extraction of figures from uploaded PDFs/images (currently manual only — by Stage 1 design)
