@@ -476,94 +476,169 @@ async def _process_one(item: dict):
     # Checkpoint — after extraction
     await _raise_if_cancelled(qid)
 
-    # Step 4 — AI (with cache by SHA)
+    # ============================================================
+    # PHASE 2 — Code-first triage + date routing
+    # ============================================================
+    # This block tries to classify the document using deterministic rules
+    # BEFORE invoking the AI. If rules fire with high confidence, we skip
+    # the AI call entirely (cost saving). If not, we fall through to the
+    # existing AI path UNCHANGED.
+    #
+    # We also extract a likely document date and find the matching open
+    # tax return, so the document can be linked to a return on insert.
+    # Outside-year documents are NEVER deleted — they are flagged
+    # needs_assignment=True and filed to 00 Inbox for manual review.
+    # ============================================================
+    from code_triage import (
+        extract_document_date,
+        date_to_financial_year,
+        classify_by_rules,
+        CODE_TRIAGE_THRESHOLD,
+    )
+    from return_router import find_matching_return, infer_return_type_hint
+
+    _triage_text = text if not extraction_failed else ""
+    triage_detected_date, triage_date_confidence = extract_document_date(filename, _triage_text)
+    triage_fy = date_to_financial_year(triage_detected_date) if triage_detected_date else None
+    triage_type_hint = infer_return_type_hint(filename, _triage_text)
+    triage_return_match = await find_matching_return(
+        _db, triage_detected_date, triage_fy, return_type_hint=triage_type_hint,
+    )
+    triage_rule_hit = classify_by_rules(filename, _triage_text) if not extraction_failed else None
+
+    # If a rule fired with high confidence AND we have a usable FY,
+    # skip the AI call. We still write the document with the rule's
+    # category and doc_type. The triage block populates `analysis`
+    # below in the same shape the AI returns.
+    skip_ai = (
+        triage_rule_hit is not None
+        and triage_rule_hit.get("confidence", 0) >= CODE_TRIAGE_THRESHOLD
+        and triage_fy is not None
+    )
+    classification_method_value: str = "ai"  # default; overridden below
+    # ============================================================
+    # END Phase 2 pre-block — Step 4 AI follows
+    # ============================================================
+
+    # Step 4 — AI (with cache by SHA) — only when not short-circuited by triage
     await _db.upload_queue.update_one({"id": qid}, {"$set": {"status": "Classifying"}})
-    cache = await _db.ai_response_cache.find_one({"sha256": sha}, {"_id": 0})
-    if cache:
-        analysis = cache["analysis"]
+    if skip_ai:
+        # Code-triage hit — build the analysis dict from the rule without calling AI
+        analysis = {
+            "document_type": triage_rule_hit.get("doc_type", "Unclassified"),
+            "category": triage_rule_hit["category"],
+            "category_confidence": "High",
+            "tax_year": triage_fy,
+            "tax_year_confidence": "High",
+            "tax_year_reason": f"Code triage: {triage_rule_hit.get('source')}",
+            "date_range_from": triage_detected_date,
+            "date_range_to": triage_detected_date,
+            "counterparty": None,
+            "one_line_summary": f"Auto-classified by rules ({triage_rule_hit.get('doc_type')})",
+            "what_it_proves": "",
+            "headline_figures": [],
+            "risk_level": "Green",
+            "accountant_review_required": False,
+            "accountant_review_reason": "",
+            "suggested_filename": None,
+        }
         ai_meta = {
             "ok": True,
-            "cached": True,
-            "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0,
-            "model": cache.get("model", os.environ.get("ANTHROPIC_MODEL", "")),
-        }
-    else:
-        # Checkpoint — before AI
-        await _raise_if_cancelled(qid)
-        ai_fallback_reason: str | None = None  # Stage 5: track the reason for any forced-Inbox routing
-        async with _AI_SEM:
-            # Hard 60s timeout — if AI hangs the whole queue would otherwise
-            # stall. Cooperative cancellation also checked after the call.
-            try:
-                result = await asyncio.wait_for(
-                    classify_document(filename, mime, text),
-                    timeout=AI_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError:
-                logger.warning(f"AI classification timed out (>{AI_TIMEOUT_SECONDS}s) for {filename}")
-                # Stage 5 — AI failure must NEVER block ingestion. We still
-                # file the document to 00 Inbox with Red risk + accountant
-                # review required so the user can act on it.
-                ai_fallback_reason = ERROR_MESSAGES[ErrorCode.AI_TIMEOUT]
-                result = {"ok": False, "error": ai_fallback_reason}
-        # Checkpoint — after AI
-        await _raise_if_cancelled(qid)
-        if not result.get("ok") or not result.get("analysis"):
-            ai_err = result.get("error") or "AI failed"
-            ai_code = classify_ai_error(ai_err)
-            await _db.ai_errors.update_one(
-                {"key": _singleton_key},
-                {"$set": {"key": _singleton_key, "message": ai_err, "timestamp": utc_now_iso(), "filename": filename}},
-                upsert=True,
-            )
-            # Stage 5 — ALL AI failures (timeout, rate-limit, generic) now
-            # save the document to Inbox/Red/Accountant-review. The user
-            # facing reason is the friendly message; raw error stays in
-            # logs only.
-            user_reason = ERROR_MESSAGES.get(ai_code, "AI failed or unavailable. Manual review required.")
-            ai_fallback_reason = ai_fallback_reason or user_reason
-            # File the document to 00 Inbox with no analysis
-            analysis = {
-                "document_type": "Unclassified",
-                "category": "Other",
-                "category_confidence": "Unsure",
-                "tax_year": "Unsure",
-                "tax_year_confidence": "Unsure",
-                "tax_year_reason": ai_err,
-                "date_range_from": None, "date_range_to": None,
-                "counterparty": None,
-                "one_line_summary": "AI classification failed — please review",
-                "what_it_proves": "",
-                "headline_figures": [],
-                "risk_level": "Red",
-                "accountant_review_required": True,
-                "accountant_review_reason": user_reason,
-                "suggested_filename": None,
-            }
-        else:
-            analysis = result["analysis"]
-            await _db.ai_response_cache.update_one(
-                {"sha256": sha},
-                {"$set": {"sha256": sha, "analysis": analysis, "model": result["model"], "created_at": utc_now_iso()}},
-                upsert=True,
-            )
-        ai_meta = {
-            "ok": result.get("ok", False),
             "cached": False,
-            "tokens_in": result.get("tokens_in", 0),
-            "tokens_out": result.get("tokens_out", 0),
-            "cost_usd": result.get("cost_usd", 0.0),
-            "model": result.get("model"),
-            "primary_model_used": result.get("primary_model_used"),
-            "final_model_used": result.get("final_model_used"),
-            "escalated_to_claude": bool(result.get("escalated_to_claude")),
-            "escalation_reason": result.get("escalation_reason"),
-            "gemini_cost_usd": result.get("gemini_cost_usd", 0.0),
-            "claude_cost_usd": result.get("claude_cost_usd", 0.0),
-            "total_ai_cost_usd": result.get("total_ai_cost_usd", result.get("cost_usd", 0.0)),
-            "error": result.get("error"),
-            "ai_fallback_reason": ai_fallback_reason,
+            "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0,
+            "model": "code_triage",
         }
+        classification_method_value = "code"
+    else:
+        cache = await _db.ai_response_cache.find_one({"sha256": sha}, {"_id": 0})
+        if cache:
+            analysis = cache["analysis"]
+            ai_meta = {
+                "ok": True,
+                "cached": True,
+                "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0,
+                "model": cache.get("model", os.environ.get("ANTHROPIC_MODEL", "")),
+            }
+            classification_method_value = "ai"
+        else:
+            # Checkpoint — before AI
+            await _raise_if_cancelled(qid)
+            ai_fallback_reason: str | None = None  # Stage 5: track the reason for any forced-Inbox routing
+            async with _AI_SEM:
+                # Hard 60s timeout — if AI hangs the whole queue would otherwise
+                # stall. Cooperative cancellation also checked after the call.
+                try:
+                    result = await asyncio.wait_for(
+                        classify_document(filename, mime, text),
+                        timeout=AI_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"AI classification timed out (>{AI_TIMEOUT_SECONDS}s) for {filename}")
+                    # Stage 5 — AI failure must NEVER block ingestion. We still
+                    # file the document to 00 Inbox with Red risk + accountant
+                    # review required so the user can act on it.
+                    ai_fallback_reason = ERROR_MESSAGES[ErrorCode.AI_TIMEOUT]
+                    result = {"ok": False, "error": ai_fallback_reason}
+            # Checkpoint — after AI
+            await _raise_if_cancelled(qid)
+            if not result.get("ok") or not result.get("analysis"):
+                ai_err = result.get("error") or "AI failed"
+                ai_code = classify_ai_error(ai_err)
+                await _db.ai_errors.update_one(
+                    {"key": _singleton_key},
+                    {"$set": {"key": _singleton_key, "message": ai_err, "timestamp": utc_now_iso(), "filename": filename}},
+                    upsert=True,
+                )
+                # Stage 5 — ALL AI failures (timeout, rate-limit, generic) now
+                # save the document to Inbox/Red/Accountant-review. The user
+                # facing reason is the friendly message; raw error stays in
+                # logs only.
+                user_reason = ERROR_MESSAGES.get(ai_code, "AI failed or unavailable. Manual review required.")
+                ai_fallback_reason = ai_fallback_reason or user_reason
+                # File the document to 00 Inbox with no analysis
+                analysis = {
+                    "document_type": "Unclassified",
+                    "category": "Other",
+                    "category_confidence": "Unsure",
+                    "tax_year": "Unsure",
+                    "tax_year_confidence": "Unsure",
+                    "tax_year_reason": ai_err,
+                    "date_range_from": None, "date_range_to": None,
+                    "counterparty": None,
+                    "one_line_summary": "AI classification failed — please review",
+                    "what_it_proves": "",
+                    "headline_figures": [],
+                    "risk_level": "Red",
+                    "accountant_review_required": True,
+                    "accountant_review_reason": user_reason,
+                    "suggested_filename": None,
+                }
+                classification_method_value = "ai_failed"
+            else:
+                analysis = result["analysis"]
+                await _db.ai_response_cache.update_one(
+                    {"sha256": sha},
+                    {"$set": {"sha256": sha, "analysis": analysis, "model": result["model"], "created_at": utc_now_iso()}},
+                    upsert=True,
+                )
+                classification_method_value = "ai"
+            ai_meta = {
+                "ok": result.get("ok", False),
+                "cached": False,
+                "tokens_in": result.get("tokens_in", 0),
+                "tokens_out": result.get("tokens_out", 0),
+                "cost_usd": result.get("cost_usd", 0.0),
+                "model": result.get("model"),
+                "primary_model_used": result.get("primary_model_used"),
+                "final_model_used": result.get("final_model_used"),
+                "escalated_to_claude": bool(result.get("escalated_to_claude")),
+                "escalation_reason": result.get("escalation_reason"),
+                "gemini_cost_usd": result.get("gemini_cost_usd", 0.0),
+                "claude_cost_usd": result.get("claude_cost_usd", 0.0),
+                "total_ai_cost_usd": result.get("total_ai_cost_usd", result.get("cost_usd", 0.0)),
+                "error": result.get("error"),
+                "ai_fallback_reason": ai_fallback_reason,
+            }
 
     # Stage 5 — unreadable / extraction failure → hard force Inbox/Red/Unsure.
     # Stage 4.5 only downgraded confidence; this fully enforces the contract.
@@ -579,6 +654,21 @@ async def _process_one(item: dict):
         ext_reason = "No reliable text could be extracted. Manual review required."
         analysis["accountant_review_reason"] = (
             f"{prev_reason} | {ext_reason}".strip(" |") if prev_reason else ext_reason
+        )
+
+    # Phase 2 — needs_assignment safety net.
+    # If the document's detected date doesn't match an open tax return
+    # (or it's ambiguous, or no date detected at all), force-route to
+    # 00 Inbox with accountant review. We NEVER delete the document.
+    if triage_return_match.get("needs_assignment"):
+        analysis = dict(analysis)
+        analysis["category"] = "00 Inbox"
+        analysis["category_confidence"] = "Unsure"
+        analysis["accountant_review_required"] = True
+        prev_reason = analysis.get("accountant_review_reason") or ""
+        na_reason = triage_return_match.get("reason") or "Needs manual assignment to a tax return"
+        analysis["accountant_review_reason"] = (
+            f"{prev_reason} | {na_reason}".strip(" |") if prev_reason else na_reason
         )
 
     # Step 6 — determine target folder
@@ -681,6 +771,13 @@ async def _process_one(item: dict):
         "user_confirmed": False,
         "user_notes": "",
         "drive_error": drive_error,
+        # ---- Phase 1 / Phase 2 additive fields ----
+        "tax_return_id": triage_return_match.get("tax_return_id"),
+        "classification_method": classification_method_value,
+        "detected_date": triage_detected_date,
+        "date_confidence": triage_date_confidence,
+        "needs_assignment": bool(triage_return_match.get("needs_assignment")),
+        "assignment_reason": triage_return_match.get("reason"),
     }
     # Checkpoint — before document insert (last cancel opportunity)
     await _raise_if_cancelled(qid)

@@ -193,6 +193,24 @@ Single private user (the owner). Single-user, no auth. Australian taxpayer with 
 - **Tested by testing_agent_v3_fork**: 12 new pytest cases in `/app/backend/tests/test_final_patch.py` (TestTaxYears, TestPropertiesEntityType, TestResetDataNoPaygReseed). Full backend suite: **126/126 passing** (+12 from 114). All 8 fixes verified — Fix 2/7/8 via live Playwright on preview URL; Fix 1/3/4/5/6 via backend tests + code review. Zero unresolved bugs, zero action items.
 - **Files touched**: `/app/backend/server.py` (dashboard dynamic FY cards, PATCH /properties, entity_type validation, _id pop), `/app/backend/property_manager.py` (entity_type_other param), `/app/frontend/src/lib/useTaxYears.js` (NEW hook), `/app/frontend/src/components/Layout.jsx`, `/app/frontend/src/components/UploadQueue.jsx`, `/app/frontend/src/pages/Dashboard.jsx`, `/app/frontend/src/pages/TaxYears.jsx`, `/app/frontend/src/pages/BankTransactions.jsx`, `/app/frontend/src/pages/Properties.jsx`, `/app/frontend/src/utils/taxYear.js` (FY2026 added).
 
+## Phase 2 — Code-First Triage + Date Routing (Feb 28, 2026)
+- **New modules** (pure logic, no DB/Drive/AI side effects):
+  - `/app/backend/code_triage.py` — `extract_document_date(filename, text)` returns `(iso_date, confidence)` via lookbehind/lookahead regex (handles `_2025-03-15` filename underscores that `\b` can't cross), `date_to_financial_year()`, `classify_by_rules()` with 13 filename rules + 5 text fallbacks. `CODE_TRIAGE_THRESHOLD=0.8` gates the AI-skip.
+  - `/app/backend/return_router.py` — `find_matching_return(db, date_iso, fy, return_type_hint=)` resolves single-match/no-match/ambiguous against open `tax_returns` rows (status ∈ {`collecting_evidence`, `ready_for_review`}). `infer_return_type_hint()` returns `'company'` only on Pty Ltd / ABN / Revive markers; never auto-personal.
+- **Pipeline integration** (surgical, in `upload_pipeline.py` between "Checkpoint — after extraction" and "Step 4 — AI"):
+  1. Pre-block extracts date, computes FY, looks up open return, runs rules → `skip_ai` flag.
+  2. AI section wrapped in `if skip_ai: <build analysis from rule> else: <existing cache + AI block unchanged>`. `classification_method_value` set to `"code"` / `"ai"` / `"ai_failed"`.
+  3. `needs_assignment` safety net forces `category="00 Inbox"` + accountant review (NEVER deletes).
+  4. New persisted fields on document: `tax_return_id`, `classification_method`, `detected_date`, `date_confidence`, `needs_assignment`, `assignment_reason`.
+- **Live smoke verified**:
+  - `synergy_2025-03-15.pdf` + single open FY2025 Personal return → category `05 Heathridge`, `tax_return_id` set, `classification_method=code`, `ai_cost_usd=0.0`, `ai_model_used=code_triage` ✅
+  - Same file but 2+ open FY2025 returns with no type hint → 00 Inbox, `needs_assignment=true`, reason="Multiple open returns…" ✅
+  - `synergy_2022-08-10.pdf` (no FY2023 return open) → 00 Inbox, `needs_assignment=true`, reason="No open return for FY2023", `is_deleted=false` — **never deleted** ✅
+- **Tests**: 19 new unit tests across `tests/test_phase2_code_triage.py` (10 cases — date regex, FY mapping, rules) and `tests/test_phase2_return_router.py` (9 cases — async mock DB for find_matching_return + 2 hint inference). All pass.
+- **Full backend suite**: **154 passed / 5 skipped** (no regressions; +19 from 135).
+- **Dependencies added**: `datefinder>=0.7.3`, `pytest-asyncio>=1.0.0` (the second pulled in transitively when running the async tests; pinned explicitly for repeatability).
+- **Files touched in Phase 2**: `backend/upload_pipeline.py` (surgical wrap + new doc fields), `backend/requirements.txt` (+2 lines). New files: `backend/code_triage.py`, `backend/return_router.py`, `backend/tests/test_phase2_code_triage.py`, `backend/tests/test_phase2_return_router.py`. Forbidden files (`ai_classifier.py`, `extraction.py`) untouched.
+
 
 ## Backlog / deferred
 ### P1 — Stage 2 candidates
