@@ -1,0 +1,31 @@
+{
+  "by_doc_type": {
+    "phone_bill": [
+      {"key": "work_use_percent", "prompt": "What percentage of this bill was for work use?", "answer_type": "percent", "required_for_claim": true}
+    ],
+    "utility_electricity": [
+      {"key": "rental_property_link", "prompt": "Which property does this bill relate to?", "answer_type": "short_text"},
+      {"key": "private_use_during_period", "prompt": "Was there any private use during this billing period?", "answer_type": "yes_no"}
+    ],
+    "utility_gas": [
+      {"key": "rental_property_link", "prompt": "Which property does this bill relate to?", "answer_type": "short_text"},
+      {"key": "private_use_during_period", "prompt": "Was there any private use during this billing period?", "answer_type": "yes_no"}
+    ],
+    "utility_water": [
+      {"key": "rental_property_link", "prompt": "Which property does this bill relate to?", "answer_type": "short_text"}
+    ],
+    "airbnb_statement": [
+      {"key": "weeks_or_nights_rented", "prompt": "How many weeks/nights was the property rented in this period?", "answer_type": "short_text"},
+      {"key": "private_use_dates", "prompt": "Were there any private-use dates in this period?", "answer_type": "short_text"}
+    ],
+    "hardware_repairs": [
+      {"key": "repair_or_improvement", "prompt": "Was this a repair (fixing wear/damage), an improvement, replacement, or initial repair before renting?", "answer_type": "single_select", "options": ["repair", "improvement", "replacement", "initial_repair", "not_sure"]}
+    ],
+    "loan_interest": [
+      {"key": "loan_purpose", "prompt": "Was this loan used 100% for the rental property (no redraw / private use)?", "answer_type": "yes_no"}
+    ],
+    "professional_registration": [
+      {"key": "reimbursed_by_employer", "prompt": "Was this reimbursed by your employer?", "answer_type": "yes_no"}
+    ]
+  }
+}

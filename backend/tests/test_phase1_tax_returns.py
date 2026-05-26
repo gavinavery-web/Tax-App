@@ -21,14 +21,14 @@ def test_create_tax_return_personal_fy2025(client):
     r = client.post("/api/tax-returns", json={
         "tax_year": "FY2025",
         "return_type": "personal",
-        "entity_name": "Gavin Christie",
+        "entity_name": "Gavin Avery",
     })
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["id"].startswith("tr-")
     assert body["tax_year"] == "FY2025"
     assert body["return_type"] == "personal"
-    assert body["entity_name"] == "Gavin Christie"
+    assert body["entity_name"] == "Gavin Avery"
     assert body["status"] == "collecting_evidence"
     assert body["is_deleted"] is False
 

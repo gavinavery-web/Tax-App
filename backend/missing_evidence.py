@@ -475,6 +475,66 @@ async def check_and_update_missing_evidence(db, document_id: str, ai_result: dic
             )
             possible_changes.append(item["id"])
 
+    # =========================================================
+    # Phase 4 — Second pass: match profile-generated items by
+    # doc_type (from code triage) + tax_return_id. The first
+    # pass above only handles the 30 seed items (which have
+    # explicit MATCH_RULES). Profile items have UUID ids and
+    # need a different strategy.
+    # =========================================================
+    try:
+        doc = await db.documents.find_one({"id": document_id}, {"_id": 0})
+        if doc and doc.get("tax_return_id"):
+            tr_id = doc["tax_return_id"]
+            # `document_type` is what code_triage / AI set on the doc
+            # (e.g. "utility_electricity", "payg_summary", ...).
+            doc_type = (doc.get("document_type") or "").lower()
+
+            DOCTYPE_TO_ITEM_HINTS = {
+                "utility_electricity": ["synergy", "electricity"],
+                "utility_gas": ["alinta", "gas"],
+                "utility_water": ["water"],
+                "airbnb_statement": ["airbnb annual", "airbnb earnings"],
+                "payg_summary": ["payg", "income statement"],
+                "professional_registration": ["ahpra", "professional registration"],
+                "phone_bill": ["phone bill"],
+                "loan_interest": ["loan interest"],
+                "council_rates": ["council rates"],
+                "private_health": ["private health"],
+                "salary_packaging": ["maxxia", "salary packaging"],
+                "hardware_repairs": ["repair"],
+            }
+            hints = DOCTYPE_TO_ITEM_HINTS.get(doc_type, [])
+
+            if hints:
+                candidates = await db.missing_items.find({
+                    "tax_return_id": tr_id,
+                    "generated_by": "profile",
+                    "status": {"$nin": ["Received", "Not applicable", "Accountant Review"]},
+                    "status_source": {"$ne": "user"},
+                }, {"_id": 0}).to_list(500)
+
+                for cand in candidates:
+                    needed = (cand.get("item_needed") or "").lower()
+                    if any(h in needed for h in hints):
+                        await db.missing_items.update_one(
+                            {"id": cand["id"]},
+                            {"$set": {
+                                "status": "Possible Match",
+                                "matched_document_id": document_id,
+                                "matched_document_name": doc.get("name"),
+                                "match_confidence": "Likely",
+                                "match_reason": f"doc_type={doc_type} + tax_return_id match",
+                                "status_source": "system",
+                                "status_updated_at": utc_now_iso(),
+                                "updated_at": utc_now_iso(),
+                            }},
+                        )
+                        possible_changes.append(cand["id"])
+                        break  # one match per upload is enough
+    except Exception as _e:
+        logger.warning(f"Phase 4 profile-item match pass failed: {_e}")
+
     return {
         "checked": checked,
         "received": received_changes,

@@ -1,0 +1,21 @@
+{
+  "car_cents_per_km": {
+    "FY2024": {"rate": 0.85, "max_km": 5000, "source_url": "https://www.ato.gov.au/individuals-and-families/income-deductions-offsets-and-records/deductions-you-can-claim/work-related-deductions/cars-transport-and-travel/cents-per-kilometre-method"},
+    "FY2025": {"rate": 0.88, "max_km": 5000, "source_url": "https://www.ato.gov.au/individuals-and-families/income-deductions-offsets-and-records/deductions-you-can-claim/work-related-deductions/cars-transport-and-travel/cents-per-kilometre-method"},
+    "FY2026": {"rate": 0.88, "max_km": 5000, "source_url": "https://www.ato.gov.au/individuals-and-families/income-deductions-offsets-and-records/deductions-you-can-claim/work-related-deductions/cars-transport-and-travel/cents-per-kilometre-method"}
+  },
+  "wfh_fixed_rate": {
+    "FY2024": {"rate": 0.67, "source_url": "https://www.ato.gov.au/individuals-and-families/income-deductions-offsets-and-records/deductions-you-can-claim/work-related-deductions/working-from-home-expenses/fixed-rate-method"},
+    "FY2025": {"rate": 0.70, "source_url": "https://www.ato.gov.au/individuals-and-families/income-deductions-offsets-and-records/deductions-you-can-claim/work-related-deductions/working-from-home-expenses/fixed-rate-method"},
+    "FY2026": {"rate": 0.70, "source_url": "https://www.ato.gov.au/individuals-and-families/income-deductions-offsets-and-records/deductions-you-can-claim/work-related-deductions/working-from-home-expenses/fixed-rate-method"}
+  },
+  "work_expense_threshold": {
+    "FY2024": {"amount": 300},
+    "FY2025": {"amount": 300},
+    "FY2026": {"amount": 300}
+  },
+  "instant_asset_writeoff_small_business": {
+    "FY2024": {"amount": 20000, "note": "Per asset, eligible small businesses, aggregated turnover < $10m"},
+    "FY2025": {"amount": 20000, "note": "Per asset, eligible small businesses, aggregated turnover < $10m"}
+  }
+}

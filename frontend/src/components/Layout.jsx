@@ -9,6 +9,7 @@ const links = [
   { to: "/register", label: "Evidence Register", icon: Table2, testid: "nav-register", shortcut: "⌘U" },
   { to: "/missing-evidence", label: "Missing Evidence", icon: AlertTriangle, testid: "nav-missing", shortcut: "⌘M" },
   { to: "/tax-years", label: "Tax Years", icon: Receipt, testid: "nav-tax-years" },
+  { to: "/tax-returns", label: "Tax Returns", icon: FileBarChart2, testid: "nav-tax-returns" },
   { to: "/tax-returns/new", label: "+ New Tax Return", icon: FilePlus, testid: "nav-new-tax-return" },
   { to: "/bank-transactions", label: "Bank Transactions", icon: Landmark, testid: "nav-bank-transactions" },
   { to: "/properties", label: "Assets & Entities", icon: Building2, testid: "nav-properties" },

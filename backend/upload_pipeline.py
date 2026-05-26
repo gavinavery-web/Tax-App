@@ -714,6 +714,31 @@ async def _process_one(item: dict):
 
     # Step 9 — create document row
     doc_id = str(uuid.uuid4())
+
+    # Phase 4 — attach suggested questions based on detected doc_type.
+    # Read-only JSON lookup, no AI, no DB.
+    suggested_questions: list[dict] = []
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        _qpath = _Path(__file__).parent / "document_questions.json"
+        if _qpath.exists():
+            _qcat = _json.loads(_qpath.read_text())
+            _dtype = (analysis.get("document_type") or "").lower().replace(" ", "_")
+            for q in _qcat.get("by_doc_type", {}).get(_dtype, []):
+                suggested_questions.append({
+                    "key": q["key"],
+                    "prompt": q["prompt"],
+                    "answer_type": q["answer_type"],
+                    "options": q.get("options"),
+                    "required_for_claim": bool(q.get("required_for_claim")),
+                    "answered": False,
+                    "answer": None,
+                    "answered_at": None,
+                })
+    except Exception as _qerr:
+        logger.warning(f"Failed to attach document questions for {filename}: {_qerr}")
+
     doc = {
         "id": doc_id,
         "name": analysis.get("one_line_summary") or canonical_filename,
@@ -778,6 +803,9 @@ async def _process_one(item: dict):
         "date_confidence": triage_date_confidence,
         "needs_assignment": bool(triage_return_match.get("needs_assignment")),
         "assignment_reason": triage_return_match.get("reason"),
+        # ---- Phase 4: question suggestions + persisted doc_type ----
+        "questions": suggested_questions,
+        "document_type": analysis.get("document_type"),
     }
     # Checkpoint — before document insert (last cancel opportunity)
     await _raise_if_cancelled(qid)

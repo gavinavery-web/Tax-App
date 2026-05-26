@@ -11,7 +11,7 @@ import json
 import uuid
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Annotated
+from typing import List, Optional, Annotated, Any
 from datetime import datetime, timezone
 
 from googleapiclient.discovery import build
@@ -437,7 +437,7 @@ class TaxReturn(BaseModel):
     id: str = Field(default_factory=lambda: f"tr-{uuid.uuid4().hex[:12]}")
     tax_year: str                                # e.g. "FY2025" — must match a tax_years.name
     return_type: str                             # "personal" | "company" | "trust" | "sole_trader"
-    entity_name: str                             # display label, e.g. "Gavin Christie" or "Revive Drip Hydration Pty Ltd"
+    entity_name: str                             # display label, e.g. "Gavin Avery" or "Revive Drip Hydration Pty Ltd"
     status: str = "collecting_evidence"          # collecting_evidence | ready_for_review | ready_for_accountant | lodged | archived
     profile_answers: dict = Field(default_factory=dict)  # populated in Phase 3, empty for now
     notes: Optional[str] = ""
@@ -2138,7 +2138,14 @@ async def tax_return_summary(return_id: str):
         raise HTTPException(status_code=404, detail="Tax return not found")
 
     doc_count = await db.documents.count_documents({"tax_return_id": return_id})
-    inbox_count = await db.documents.count_documents({"tax_return_id": return_id, "category": "Other", "status": "Accountant review"})
+    inbox_count = await db.documents.count_documents({
+        "tax_return_id": return_id,
+        "$or": [
+            {"category": "00 Inbox"},
+            {"needs_assignment": True},
+            {"accountant_review_required": True, "status": "Accountant review"},
+        ],
+    })
     missing_total = await db.missing_items.count_documents({"tax_return_id": return_id})
     missing_open = await db.missing_items.count_documents({
         "tax_return_id": return_id,
@@ -2199,6 +2206,93 @@ async def generate_checklist(return_id: str):
         profile_answers=row.get("profile_answers", {}),
     )
     return {"ok": True, "tax_return_id": return_id, **result}
+
+
+# =================== Tax Rules Engine (Phase 4) ===================
+from tax_rules_engine import (
+    get_rule as _tre_get_rule,
+    calculate_car_cents_per_km as _tre_car,
+    calculate_wfh_fixed_rate as _tre_wfh,
+    calculate_phone_internet_apportionment as _tre_phone,
+    work_expense_evidence_threshold as _tre_threshold,
+)
+
+
+@api_router.get("/tax-rules/{rule_key}/{tax_year}")
+async def get_tax_rule(rule_key: str, tax_year: str):
+    rule = _tre_get_rule(rule_key, tax_year)
+    if not rule:
+        raise HTTPException(status_code=404, detail=f"No rule '{rule_key}' for {tax_year}")
+    return {"rule_key": rule_key, "tax_year": tax_year, "rule": rule}
+
+
+@api_router.post("/tax-rules/calculate/car-cents-per-km")
+async def calc_car_cpk(payload: dict):
+    return _tre_car(payload.get("tax_year", "FY2025"), payload.get("km", 0))
+
+
+@api_router.post("/tax-rules/calculate/wfh-fixed-rate")
+async def calc_wfh(payload: dict):
+    return _tre_wfh(payload.get("tax_year", "FY2025"), payload.get("hours", 0))
+
+
+@api_router.post("/tax-rules/calculate/phone-internet")
+async def calc_phone(payload: dict):
+    return _tre_phone(payload.get("bill_amount", 0), payload.get("work_use_percent", 0))
+
+
+@api_router.get("/tax-rules/threshold/work-expenses/{tax_year}")
+async def get_work_expense_threshold(tax_year: str):
+    return _tre_threshold(tax_year)
+
+
+# =================== Document Questions (Phase 4) ===================
+
+class DocumentQuestionAnswer(BaseModel):
+    key: str
+    answer: Any = None
+
+
+@api_router.patch("/documents/{document_id}/questions/{question_key}")
+async def answer_document_question(document_id: str, question_key: str, payload: DocumentQuestionAnswer):
+    doc = await db.documents.find_one({"id": document_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    questions = doc.get("questions") or []
+    updated = False
+    for q in questions:
+        if q.get("key") == question_key:
+            q["answer"] = payload.answer
+            q["answered"] = payload.answer is not None and payload.answer != ""
+            q["answered_at"] = utc_now_iso()
+            updated = True
+            break
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Question '{question_key}' not on this document")
+    await db.documents.update_one(
+        {"id": document_id},
+        {"$set": {"questions": questions, "updated_at": utc_now_iso(), "user_confirmed": True}},
+    )
+    return {"ok": True, "document_id": document_id, "question_key": question_key, "questions": questions}
+
+
+@api_router.get("/tax-returns/{return_id}/unanswered-questions")
+async def list_unanswered_questions_for_return(return_id: str):
+    docs = await db.documents.find(
+        {"tax_return_id": return_id, "questions": {"$exists": True, "$ne": []}},
+        {"_id": 0, "id": 1, "name": 1, "questions": 1, "category": 1},
+    ).to_list(2000)
+    out = []
+    for d in docs:
+        unanswered = [q for q in (d.get("questions") or []) if not q.get("answered")]
+        if unanswered:
+            out.append({
+                "document_id": d["id"],
+                "document_name": d.get("name"),
+                "category": d.get("category"),
+                "unanswered": unanswered,
+            })
+    return {"tax_return_id": return_id, "documents_with_questions": out, "count": len(out)}
 
 
 

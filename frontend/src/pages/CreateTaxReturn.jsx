@@ -134,7 +134,7 @@ export default function CreateTaxReturn() {
           </div>
           <div>
             <label className="block text-xs uppercase tracking-wider text-zinc-500 mono mb-1">Entity / name</label>
-            <Input value={entityName} onChange={(e) => setEntityName(e.target.value)} placeholder="e.g. Gavin Christie — Personal" data-testid="create-tr-entity" />
+            <Input value={entityName} onChange={(e) => setEntityName(e.target.value)} placeholder="e.g. Personal return" data-testid="create-tr-entity" />
           </div>
           <div className="flex justify-end">
             <Button onClick={goToStep2} className="rounded-sm gap-1 bg-zinc-950 hover:bg-zinc-800" data-testid="create-tr-next">
