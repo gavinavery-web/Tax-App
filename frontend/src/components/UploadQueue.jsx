@@ -234,7 +234,18 @@ export default function UploadQueue({ onChanged }) {
           <tbody>
             {items.map((it) => (
               <tr key={it.id} data-testid={`queue-row-${it.id}`}>
-                <td className="font-medium truncate max-w-[280px]" title={it.filename}>{it.filename}</td>
+                <td className="font-medium truncate max-w-[280px]" title={it.filename}>
+                  {it.result_document_id ? (
+                    <Link
+                      to={`/register?open=${encodeURIComponent(it.result_document_id)}`}
+                      className="text-blue-700 hover:underline"
+                      data-testid={`queue-filename-link-${it.id}`}
+                      title="Open document in Evidence Register"
+                    >{it.filename}</Link>
+                  ) : (
+                    <span data-testid={`queue-filename-${it.id}`}>{it.filename}</span>
+                  )}
+                </td>
                 <td>{renderStatusCell(it)}</td>
                 <td className="text-zinc-600">{it.ai_category || (it.status === "Duplicate?" ? `dup of ${it.duplicate_meta?.name || ""}` : "—")}</td>
                 <td>{it.ai_confidence ? <FigureBadge value={it.ai_confidence} /> : <span className="text-zinc-400">—</span>}</td>

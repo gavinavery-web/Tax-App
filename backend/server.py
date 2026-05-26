@@ -89,7 +89,7 @@ CATEGORY_TO_FOLDER = {
 }
 
 CATEGORIES = list(CATEGORY_TO_FOLDER.keys())
-TAX_YEARS = ["FY2024", "FY2025", "Both", "Unsure"]
+TAX_YEARS = ["FY2024", "FY2025", "FY2026", "Both", "Unsure"]
 
 # Dynamic tax-year config seed. The canonical source of truth is the
 # `tax_years` collection (seeded on startup if empty). The hardcoded
@@ -1159,7 +1159,13 @@ def card_status(card, total, review_count):
 async def dashboard():
     all_docs = await db.documents.find({"is_deleted": {"$ne": True}}, {"_id": 0}).to_list(5000)
     cards = []
-    for card in DASHBOARD_CARDS:
+    # Build tax-year cards dynamically from the active tax_years config.
+    active = await get_active_tax_years()
+    dynamic_cards = [
+        {"key": ty.lower(), "title": f"{ty} Tax Return", "type": "tax_year", "value": ty}
+        for ty in active
+    ] + [c for c in DASHBOARD_CARDS if c["type"] != "tax_year"]
+    for card in dynamic_cards:
         if card["type"] == "tax_year":
             matching = [d for d in all_docs if d["tax_year"] == card["value"] or d["tax_year"] == "Both"]
         elif card["type"] == "category":
@@ -1958,6 +1964,8 @@ async def create_tax_year(payload: dict):
         "updated_at": now,
     }
     await db.tax_years.insert_one(row)
+    # insert_one mutates row to add ObjectId _id which can't JSON-serialise.
+    row.pop("_id", None)
     return {"success": True, "tax_year": row}
 
 
@@ -2287,13 +2295,38 @@ async def create_property_endpoint(payload: dict):
     name = (payload or {}).get("property_name")
     address = (payload or {}).get("address", "")
     entity_type = (payload or {}).get("entity_type", "property")
+    entity_type_other = (payload or {}).get("entity_type_other", "")
     if not name:
         raise HTTPException(400, "property_name is required")
+    valid_types = {"property", "business", "trust", "super", "other"}
+    if entity_type not in valid_types:
+        raise HTTPException(400, f"entity_type must be one of {sorted(valid_types)}")
+    if entity_type == "other" and not entity_type_other.strip():
+        raise HTTPException(400, "entity_type_other is required when entity_type='other'")
     exists = await db.properties.find_one({"property_name": name}, {"_id": 0})
     if exists:
         raise HTTPException(409, f"asset/entity '{name}' already exists")
-    new_id = await _prop.add_property(db, property_name=name, address=address, entity_type=entity_type)
+    new_id = await _prop.add_property(
+        db, property_name=name, address=address,
+        entity_type=entity_type, entity_type_other=entity_type_other,
+    )
     return {"success": True, "property_id": new_id}
+
+
+@api_router.patch("/properties/{property_id}")
+async def update_property_endpoint(property_id: str, payload: dict):
+    update = {k: v for k, v in payload.items() if k in {"property_name", "address", "entity_type", "entity_type_other"}}
+    if not update:
+        raise HTTPException(400, "no editable fields supplied")
+    if "entity_type" in update:
+        valid_types = {"property", "business", "trust", "super", "other"}
+        if update["entity_type"] not in valid_types:
+            raise HTTPException(400, f"entity_type must be one of {sorted(valid_types)}")
+    update["updated_at"] = utc_now_iso()
+    res = await db.properties.update_one({"id": property_id}, {"$set": update})
+    if res.matched_count == 0:
+        raise HTTPException(404, "asset/entity not found")
+    return await db.properties.find_one({"id": property_id}, {"_id": 0})
 
 
 @api_router.get("/properties/{property_id}")

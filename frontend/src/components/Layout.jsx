@@ -1,7 +1,8 @@
 import React, { useEffect } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Table2, AlertTriangle, FileBarChart2, Settings as SettingsIcon, ShieldCheck, Receipt, Landmark, Home, Trash2 } from "lucide-react";
+import { LayoutDashboard, Table2, AlertTriangle, FileBarChart2, Settings as SettingsIcon, ShieldCheck, Receipt, Landmark, Building2, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
+import useTaxYears from "../lib/useTaxYears";
 
 const links = [
   { to: "/", end: true, label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard", shortcut: "⌘⇧D" },
@@ -9,7 +10,7 @@ const links = [
   { to: "/missing-evidence", label: "Missing Evidence", icon: AlertTriangle, testid: "nav-missing", shortcut: "⌘M" },
   { to: "/tax-years", label: "Tax Years", icon: Receipt, testid: "nav-tax-years" },
   { to: "/bank-transactions", label: "Bank Transactions", icon: Landmark, testid: "nav-bank-transactions" },
-  { to: "/properties", label: "Properties", icon: Home, testid: "nav-properties" },
+  { to: "/properties", label: "Assets & Entities", icon: Building2, testid: "nav-properties" },
   { to: "/rubbish-bin", label: "Rubbish Bin", icon: Trash2, testid: "nav-rubbish-bin" },
   { to: "/reports", label: "Reports", icon: FileBarChart2, testid: "nav-reports" },
   { to: "/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings" },
@@ -17,6 +18,7 @@ const links = [
 
 export default function Layout() {
   const navigate = useNavigate();
+  const { activeNames } = useTaxYears();
 
   // Stage 4: on app load, recover any uploads stuck in active state (e.g.
   // backend was restarted mid-batch). Fire-and-forget — safe to ignore failure.
@@ -49,8 +51,10 @@ export default function Layout() {
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-5 h-5 text-zinc-900" strokeWidth={2.2} />
             <div>
-              <div className="text-sm font-semibold tracking-tight" style={{ fontFamily: "Chivo" }}>Tax Evidence Vault</div>
-              <div className="text-[11px] text-zinc-500 mono">FY2024 · FY2025 · Stage 7</div>
+              <div className="text-sm font-semibold tracking-[0.16em]" style={{ fontFamily: "Chivo" }} data-testid="app-header-title">TAX FINANCES</div>
+              <div className="text-[11px] text-zinc-500 mono" data-testid="app-header-years">
+                {activeNames.length ? activeNames.join(" · ") : "—"}
+              </div>
             </div>
           </div>
         </div>

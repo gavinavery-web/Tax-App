@@ -9,6 +9,7 @@ import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
+import useTaxYears from "../lib/useTaxYears";
 
 const SECTIONS = [
   { value: "salary_wages", label: "Salary & Wages", side: "income" },
@@ -272,7 +273,8 @@ function Tag({ tone, children }) {
 
 // ----------- Add-to-Return modal (manual year/section/amount override) -----------
 function AddToReturnModal({ tx, onClose, onSuccess }) {
-  const [taxYear, setTaxYear] = useState("FY2024");
+  const { activeNames } = useTaxYears();
+  const [taxYear, setTaxYear] = useState(activeNames[0] || "FY2025");
   const [side, setSide] = useState("deduction");
   const [section, setSection] = useState("other_deductions");
   const [amount, setAmount] = useState("");
@@ -282,12 +284,13 @@ function AddToReturnModal({ tx, onClose, onSuccess }) {
 
   useEffect(() => {
     if (!tx) return;
-    // Default the year from the txn date (Australian FY).
-    let fy = "FY2024";
+    // Default the year from the txn date (Australian FY) — fallback to first
+    // active year if the derived year isn't currently active.
+    let fy = activeNames[0] || "FY2025";
     try {
       const d = new Date(tx.transaction_date);
-      fy = (d.getMonth() + 1) >= 7 ? `FY${d.getFullYear() + 1}` : `FY${d.getFullYear()}`;
-      if (!["FY2024", "FY2025"].includes(fy)) fy = "FY2024";
+      const derived = (d.getMonth() + 1) >= 7 ? `FY${d.getFullYear() + 1}` : `FY${d.getFullYear()}`;
+      if (activeNames.includes(derived)) fy = derived;
     } catch (e) { /* keep default */ }
     setTaxYear(fy);
     // Default income/deduction from the credit/debit of the txn.
@@ -354,8 +357,9 @@ function AddToReturnModal({ tx, onClose, onSuccess }) {
               <Select value={taxYear} onValueChange={setTaxYear}>
                 <SelectTrigger data-testid="add-modal-year"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="FY2024">FY2024</SelectItem>
-                  <SelectItem value="FY2025">FY2025</SelectItem>
+                  {(activeNames.length ? activeNames : ["FY2024", "FY2025"]).map((y) => (
+                    <SelectItem key={y} value={y}>{y}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

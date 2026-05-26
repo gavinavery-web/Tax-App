@@ -62,13 +62,14 @@ async def get_property(db, property_id: str) -> Optional[Dict]:
 
 
 async def add_property(
-    db, property_name: str, address: str, entity_type: str = "property",
+    db, property_name: str, address: str,
+    entity_type: str = "property", entity_type_other: str = "",
 ) -> str:
     """Insert a new asset / entity. Returns the new id.
 
-    `entity_type` is a soft-typed string: property, business, trust,
-    employment, investment, vehicle, other. We don't enforce the set
-    because it'll naturally expand."""
+    `entity_type` is one of: property, business, trust, super, other.
+    When `entity_type == "other"`, `entity_type_other` carries the
+    user-supplied description."""
     now = _utc_now_iso()
     new_id = str(uuid.uuid4())
     await db.properties.insert_one({
@@ -76,11 +77,12 @@ async def add_property(
         "property_name": property_name,
         "address": address,
         "entity_type": entity_type,
+        "entity_type_other": entity_type_other,
         "use_periods": [],
         "created_at": now,
         "updated_at": now,
     })
-    logger.info(f"added property: {property_name} ({entity_type})")
+    logger.info(f"added asset/entity: {property_name} ({entity_type})")
     return new_id
 
 

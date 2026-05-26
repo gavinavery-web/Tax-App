@@ -5,6 +5,7 @@ import { StatusPill } from "../components/StatusPill";
 import { Cloud, CloudOff, AlertCircle, Banknote, FileStack, ShieldCheck, AlertTriangle as AlertTri, Upload as UploadIcon, CheckCircle2, PackageOpen } from "lucide-react";
 import { fmtAUD } from "../lib/constants";
 import { API } from "../lib/api";
+import useTaxYears from "../lib/useTaxYears";
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
@@ -12,6 +13,7 @@ export default function Dashboard() {
   const [paygFigures, setPaygFigures] = useState([]);
   const [stats, setStats] = useState(null);
   const [readiness, setReadiness] = useState(null);
+  const { active: activeYears, activeNames } = useTaxYears();
 
   const load = async () => {
     const [d, ds, pf, st, rd] = await Promise.all([
@@ -53,8 +55,11 @@ export default function Dashboard() {
     <div className="p-6 max-w-[1400px] mx-auto" data-testid="dashboard-page">
       <div className="flex items-center justify-between mb-5">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight" style={{ fontFamily: "Chivo" }}>Dashboard</h1>
-          <div className="text-sm text-zinc-500 mt-1">Evidence overview for FY2024 & FY2025 returns (overdue).</div>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-[0.14em]" style={{ fontFamily: "Chivo" }} data-testid="dashboard-title">TAX FINANCES</h1>
+          <div className="text-sm text-zinc-500 mt-1">
+            Evidence overview · {activeNames.length ? activeNames.join(" · ") : "no active years"} ·{" "}
+            <Link to="/tax-years" className="text-blue-700 hover:underline" data-testid="dashboard-manage-years-link">manage years</Link>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {drive && (
@@ -184,14 +189,17 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Tax year status row */}
+      {/* Tax year status row — dynamic from /api/tax-years/config */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-6">
-        {["FY2024", "FY2025"].map((yr) => {
+        {activeNames.map((yr) => {
           const card = data?.cards.find((c) => c.value === yr);
           const total = totalByYear(yr);
+          const cfg = activeYears.find((y) => y.name === yr);
+          const isCurrent = cfg && new Date() >= new Date(cfg.start_date) && new Date() <= new Date(cfg.end_date);
+          const label = isCurrent ? "In progress — not ready to lodge" : "Active";
           return (
             <div key={yr} className="bg-white border-l-2 border-l-zinc-950 border border-zinc-200 rounded-sm p-4" data-testid={`fy-summary-${yr}`}>
-              <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">{yr} Tax Return · OVERDUE</div>
+              <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">{yr} Tax Return · {label}</div>
               <div className="flex items-end justify-between">
                 <div>
                   <div className="text-2xl font-bold mono">{card?.documents ?? "—"}</div>
@@ -199,24 +207,24 @@ export default function Dashboard() {
                 </div>
                 <div className="text-right">
                   <div className="text-sm mono">{fmtAUD(total)}</div>
-                  <div className="text-[11px] text-zinc-500">PAYG income (preloaded)</div>
+                  <div className="text-[11px] text-zinc-500">PAYG income (from payment summaries)</div>
                 </div>
               </div>
               <div className="mt-3"><StatusPill value={card?.status || "Not started"} testid={`fy-status-${yr}`} /></div>
             </div>
           );
         })}
-        <div className="bg-white border-l-2 border-l-amber-500 border border-zinc-200 rounded-sm p-4">
-          <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">FY2023 / FY2026</div>
-          <div className="text-sm text-zinc-700">FY2023 lodged & assessed.</div>
-          <div className="text-sm text-zinc-700">FY2026 current/live — not in scope.</div>
-        </div>
+        {activeNames.length === 0 && (
+          <div className="bg-white border-l-2 border-l-amber-500 border border-zinc-200 rounded-sm p-4 col-span-3 text-sm text-zinc-700">
+            No tax years are active. <Link to="/tax-years" className="text-blue-700 hover:underline">Configure tax years →</Link>
+          </div>
+        )}
       </div>
 
       {/* Category cards */}
       <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">Categories</div>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-6">
-        {(data?.cards || []).filter((c) => !["fy2024", "fy2025"].includes(c.key)).map((c) => {
+        {(data?.cards || []).filter((c) => c.type !== "tax_year").map((c) => {
           const isMissing = c.key === "missing";
           const isReview = c.key === "review";
           return (
@@ -275,22 +283,14 @@ export default function Dashboard() {
                 </td>
               </tr>
             ))}
-            {paygFigures.length > 0 && (
-              <>
-                <tr style={{ background: "#FAFAFA" }}>
-                  <td className="font-semibold">FY2024 total</td>
-                  <td></td>
-                  <td className="mono text-right font-semibold">{fmtAUD(totalByYear("FY2024"))}</td>
-                  <td></td>
-                </tr>
-                <tr style={{ background: "#FAFAFA" }}>
-                  <td className="font-semibold">FY2025 total</td>
-                  <td></td>
-                  <td className="mono text-right font-semibold">{fmtAUD(totalByYear("FY2025"))}</td>
-                  <td></td>
-                </tr>
-              </>
-            )}
+            {paygFigures.length > 0 && activeNames.map((yr) => (
+              <tr key={`total-${yr}`} style={{ background: "#FAFAFA" }}>
+                <td className="font-semibold">{yr} total</td>
+                <td></td>
+                <td className="mono text-right font-semibold">{fmtAUD(totalByYear(yr))}</td>
+                <td></td>
+              </tr>
+            ))}
           </tbody>
         </table>
         <div className="px-4 py-2 border-t border-zinc-200 bg-zinc-50 text-[11px] text-zinc-600">
