@@ -1,0 +1,95 @@
+{
+  "personal": {
+    "version": "1.0",
+    "groups": [
+      {
+        "id": "income_triggers",
+        "title": "Income — what applied this year?",
+        "questions": [
+          { "key": "has_payg", "text": "Did you have PAYG (employee) income?", "type": "yes_no", "follow_up": { "yes": [{"key": "payg_employers", "text": "List your employers", "type": "list_text"}] } },
+          { "key": "has_govt_payments", "text": "Did you receive Centrelink or other government payments?", "type": "yes_no" },
+          { "key": "has_bank_interest", "text": "Did you receive bank interest?", "type": "yes_no" },
+          { "key": "has_dividends", "text": "Did you receive dividends or managed fund distributions?", "type": "yes_no" },
+          { "key": "has_trust_distributions", "text": "Were you a beneficiary of a trust?", "type": "yes_no" },
+          { "key": "has_rental_income", "text": "Did you receive rental income from any property?", "type": "yes_no", "follow_up": { "yes": [{"key": "rental_properties", "text": "List the rental properties (address each)", "type": "list_text"}] } },
+          { "key": "has_airbnb", "text": "Did any property earn Airbnb / short-stay income?", "type": "yes_no", "follow_up": { "yes": [{"key": "airbnb_property", "text": "Which property?", "type": "short_text"}, {"key": "airbnb_dates", "text": "Approx dates (e.g. 'Jul 2024 to Dec 2024')", "type": "short_text"}] } },
+          { "key": "has_business_income", "text": "Did you have sole-trader or business income?", "type": "yes_no" },
+          { "key": "has_company_income", "text": "Did a company pay you wages, director fees, dividends, or loans?", "type": "yes_no" },
+          { "key": "has_foreign_income", "text": "Did you receive any foreign income?", "type": "yes_no" },
+          { "key": "has_crypto", "text": "Did you buy, sell, swap, stake or spend crypto?", "type": "yes_no" },
+          { "key": "has_capital_gains", "text": "Did you sell shares, ETFs, property, or other assets?", "type": "yes_no" },
+          { "key": "has_compensation_or_inheritance", "text": "Did you receive compensation, insurance payout, inheritance, or estate distribution?", "type": "yes_no" }
+        ]
+      },
+      {
+        "id": "deduction_triggers",
+        "title": "Deductions — which areas might apply?",
+        "questions": [
+          { "key": "claim_car", "text": "Did you use your own car for work-related travel (not normal home-to-work)?", "type": "yes_no", "follow_up": { "yes": [{"key": "car_has_logbook", "text": "Do you have a valid logbook?", "type": "yes_no"}] } },
+          { "key": "claim_phone_internet", "text": "Did you use phone or internet for work?", "type": "yes_no" },
+          { "key": "claim_wfh", "text": "Did you work from home?", "type": "yes_no", "follow_up": { "yes": [{"key": "wfh_method", "text": "Which method?", "type": "single_select", "options": ["fixed_rate", "actual_cost", "not_sure"]}] } },
+          { "key": "claim_uniform", "text": "Did you buy or launder compulsory uniform or protective clothing?", "type": "yes_no" },
+          { "key": "claim_professional_registration", "text": "Did you pay professional registration, licences, or work-related memberships (AHPRA, union, etc.)?", "type": "yes_no" },
+          { "key": "claim_self_education", "text": "Did you pay for self-education / CPD related to your current job?", "type": "yes_no" },
+          { "key": "claim_tools_equipment", "text": "Did you buy tools, equipment, laptop or work devices?", "type": "yes_no" },
+          { "key": "claim_donations", "text": "Did you make donations to registered charities (DGRs)?", "type": "yes_no" },
+          { "key": "claim_income_protection", "text": "Did you pay income protection insurance personally?", "type": "yes_no" },
+          { "key": "claim_tax_agent_fees", "text": "Did you pay tax agent or accountant fees?", "type": "yes_no" },
+          { "key": "claim_personal_super", "text": "Did you make personal super contributions you want to claim?", "type": "yes_no" }
+        ]
+      },
+      {
+        "id": "personal_info",
+        "title": "Personal & family info",
+        "questions": [
+          { "key": "has_private_health", "text": "Did you have private hospital cover?", "type": "yes_no" },
+          { "key": "has_spouse", "text": "Did you have a spouse or de facto partner during the year?", "type": "yes_no" },
+          { "key": "has_dependants", "text": "Did you have dependent children?", "type": "yes_no" },
+          { "key": "has_hecs", "text": "Do you have a HECS / HELP debt?", "type": "yes_no" }
+        ]
+      }
+    ]
+  },
+  "company": {
+    "version": "1.0",
+    "groups": [
+      {
+        "id": "company_setup",
+        "title": "Company setup",
+        "questions": [
+          { "key": "trading_status", "text": "Was the company trading or dormant this year?", "type": "single_select", "options": ["trading", "dormant"] },
+          { "key": "gst_registered", "text": "Is the company registered for GST?", "type": "yes_no" },
+          { "key": "has_employees", "text": "Did the company pay any employees or directors?", "type": "yes_no" },
+          { "key": "owns_assets", "text": "Did the company own or buy assets during the year?", "type": "yes_no" },
+          { "key": "director_loans", "text": "Were there any loans to/from directors or shareholders?", "type": "yes_no" },
+          { "key": "private_expenses", "text": "Did the company pay any private expenses on behalf of a director/shareholder?", "type": "yes_no" }
+        ]
+      },
+      {
+        "id": "company_income",
+        "title": "Company income",
+        "questions": [
+          { "key": "has_sales_income", "text": "Did the company earn sales/services income?", "type": "yes_no" },
+          { "key": "has_interest_income", "text": "Did the company earn interest income?", "type": "yes_no" },
+          { "key": "has_grants", "text": "Did the company receive any government grants?", "type": "yes_no" }
+        ]
+      }
+    ]
+  },
+  "trust": {
+    "version": "1.0",
+    "groups": [
+      { "id": "trust_placeholder", "title": "Trust profile", "questions": [
+        { "key": "trust_placeholder", "text": "Trust profile questions will be added in a future phase.", "type": "info" }
+      ]}
+    ]
+  },
+  "sole_trader": {
+    "version": "1.0",
+    "groups": [
+      { "id": "sole_trader_placeholder", "title": "Sole Trader profile", "questions": [
+        { "key": "sole_trader_placeholder", "text": "Sole trader profile questions will be added in a future phase.", "type": "info" }
+      ]}
+    ]
+  }
+}

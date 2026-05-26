@@ -212,6 +212,27 @@ Single private user (the owner). Single-user, no auth. Australian taxpayer with 
 - **Files touched in Phase 2**: `backend/upload_pipeline.py` (surgical wrap + new doc fields), `backend/requirements.txt` (+2 lines). New files: `backend/code_triage.py`, `backend/return_router.py`, `backend/tests/test_phase2_code_triage.py`, `backend/tests/test_phase2_return_router.py`. Forbidden files (`ai_classifier.py`, `extraction.py`) untouched.
 
 
+## Phase 3 — Tax Profile Wizard + Dynamic Missing-Evidence Generator (Feb 28, 2026)
+- **New catalogues** (editable JSON, no code change to add/remove questions or rules):
+  - `/app/backend/profile_questions.json` — 4 return-type sections; Personal has 3 groups (28 questions incl. conditional follow-ups), Company has 2 groups (9 questions). Trust + Sole Trader carry placeholder rows.
+  - `/app/backend/evidence_rules.json` — 26 personal rules, 6 company rules. Each rule has `if` predicate + `items[]` template (item / category / priority / where / why).
+- **New engine** `/app/backend/profile_engine.py`:
+  - `get_questions_for_return_type(t)` returns the right group set.
+  - `generate_missing_evidence()` is **idempotent**: uniqueness key is `(tax_return_id, profile_rule_key, item_needed)`. Skips rows where `status_source == "user"` (Stage 4.5 user-override protection) without overwriting them. NEVER deletes anything. Returns `{created, skipped_existing, skipped_user_managed}`.
+- **New routes** on `server.py`:
+  - `GET /api/tax-returns/{id}/profile-questions` — return-type-aware question set
+  - `POST /api/tax-returns/{id}/generate-evidence-checklist` — runs the engine with current `profile_answers`
+- **Frontend wizard** at `/tax-returns/new` (single new page; existing pages untouched):
+  - 3 steps with progress badges (Basics → Confirm → Profile)
+  - Conditional follow-up questions render only when parent is `Yes` (e.g. `wfh_method` appears only when `claim_wfh == true`)
+  - Submission generates the checklist + toasts the count, then redirects to `/missing-evidence?return=<id>`
+  - Sidebar gains a `+ New Tax Return` link (`data-testid="nav-new-tax-return"`)
+- **Tests**: 6 new test cases in `/app/backend/tests/test_phase3_profile.py` covering: question set returned, 13-item generation from a realistic profile, idempotency, seeded items untouched, user-managed items never overwritten, company question set is distinct from personal. Switched from FastAPI `TestClient` to `requests` against the live backend (matching dominant repo pattern) to avoid the cross-module motor event-loop teardown issue. Fixture also cleans `missing_items` and tax_returns it created.
+- **Live E2E verified**: ran wizard end-to-end via Playwright — FY2025 / Personal / "E2E Wizard Test" → 6 yes-answers + `wfh_method=fixed_rate` → 13 items generated (Critical: PAYG + rental, Important: phone/internet/WFH/AHPRA/private health, etc.) → redirected to `/missing-evidence?return=tr-…` ✅
+- **Full backend suite**: **160 passed / 5 skipped** (+6 from Phase 2's 154; no regressions).
+- **Files touched in Phase 3**: NEW: `backend/profile_questions.json`, `backend/evidence_rules.json`, `backend/profile_engine.py`, `backend/tests/test_phase3_profile.py`, `frontend/src/pages/CreateTaxReturn.jsx`. MODIFIED: `backend/server.py` (+2 routes), `frontend/src/App.js` (+1 route), `frontend/src/components/Layout.jsx` (+1 sidebar link + FilePlus icon). Forbidden files (legacy seeded `MISSING_PRELOAD`) untouched — they continue to live under `generated_by="seed"`.
+
+
 ## Backlog / deferred
 ### P1 — Stage 2 candidates
 - AI extraction of figures from uploaded PDFs/images (currently manual only — by Stage 1 design)

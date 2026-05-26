@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Table2, AlertTriangle, FileBarChart2, Settings as SettingsIcon, ShieldCheck, Receipt, Landmark, Building2, Trash2 } from "lucide-react";
+import { LayoutDashboard, Table2, AlertTriangle, FileBarChart2, Settings as SettingsIcon, ShieldCheck, Receipt, Landmark, Building2, Trash2, FilePlus } from "lucide-react";
 import { api } from "../lib/api";
 import useTaxYears from "../lib/useTaxYears";
 
@@ -9,6 +9,7 @@ const links = [
   { to: "/register", label: "Evidence Register", icon: Table2, testid: "nav-register", shortcut: "⌘U" },
   { to: "/missing-evidence", label: "Missing Evidence", icon: AlertTriangle, testid: "nav-missing", shortcut: "⌘M" },
   { to: "/tax-years", label: "Tax Years", icon: Receipt, testid: "nav-tax-years" },
+  { to: "/tax-returns/new", label: "+ New Tax Return", icon: FilePlus, testid: "nav-new-tax-return" },
   { to: "/bank-transactions", label: "Bank Transactions", icon: Landmark, testid: "nav-bank-transactions" },
   { to: "/properties", label: "Assets & Entities", icon: Building2, testid: "nav-properties" },
   { to: "/rubbish-bin", label: "Rubbish Bin", icon: Trash2, testid: "nav-rubbish-bin" },

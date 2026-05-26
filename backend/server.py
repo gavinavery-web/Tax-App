@@ -2171,6 +2171,36 @@ async def assign_documents_to_return(return_id: str, document_ids: List[str]):
     return {"ok": True, "matched": result.matched_count, "modified": result.modified_count}
 
 
+# =================== Profile (Phase 3) ===================
+from profile_engine import (
+    get_questions_for_return_type,
+    generate_missing_evidence as _generate_missing_evidence,
+)
+
+
+@api_router.get("/tax-returns/{return_id}/profile-questions")
+async def get_profile_questions(return_id: str):
+    row = await db.tax_returns.find_one({"id": return_id, "is_deleted": {"$ne": True}}, {"_id": 0})
+    if not row:
+        raise HTTPException(status_code=404, detail="Tax return not found")
+    return get_questions_for_return_type(row["return_type"])
+
+
+@api_router.post("/tax-returns/{return_id}/generate-evidence-checklist")
+async def generate_checklist(return_id: str):
+    row = await db.tax_returns.find_one({"id": return_id, "is_deleted": {"$ne": True}}, {"_id": 0})
+    if not row:
+        raise HTTPException(status_code=404, detail="Tax return not found")
+    result = await _generate_missing_evidence(
+        db,
+        tax_return_id=return_id,
+        return_type=row["return_type"],
+        tax_year=row["tax_year"],
+        profile_answers=row.get("profile_answers", {}),
+    )
+    return {"ok": True, "tax_return_id": return_id, **result}
+
+
 
 
 @api_router.get("/tax-return-items")

@@ -1,0 +1,197 @@
+{
+  "personal": {
+    "rules": [
+      { "rule_key": "payg_income_statements", "if": {"has_payg": true},
+        "items": [
+          {"item": "PAYG / Income Statement (per employer)", "category": "02 PAYG Income", "priority": "Critical", "where": "ATO myGov → Income statements", "why": "Required to declare employment income"}
+        ]
+      },
+      { "rule_key": "centrelink_summary", "if": {"has_govt_payments": true},
+        "items": [
+          {"item": "Centrelink / government payment summary", "category": "Other", "priority": "Critical", "where": "myGov → Centrelink → Payment summary", "why": "Required to declare government income"}
+        ]
+      },
+      { "rule_key": "bank_interest_summary", "if": {"has_bank_interest": true},
+        "items": [
+          {"item": "Bank interest annual summary", "category": "Other", "priority": "Important", "where": "Internet banking → Tax statements", "why": "Required to declare interest income"}
+        ]
+      },
+      { "rule_key": "dividend_statements", "if": {"has_dividends": true},
+        "items": [
+          {"item": "Dividend / managed fund tax statements", "category": "Other", "priority": "Important", "where": "Broker / fund manager portal", "why": "Required to declare dividend income & franking credits"}
+        ]
+      },
+      { "rule_key": "trust_distribution_statement", "if": {"has_trust_distributions": true},
+        "items": [
+          {"item": "Trust distribution statement", "category": "09 Accountant Review", "priority": "Critical", "where": "Trustee / trust accountant", "why": "Required to declare trust income"}
+        ]
+      },
+      { "rule_key": "rental_property_evidence", "if": {"has_rental_income": true},
+        "items": [
+          {"item": "Property manager annual statement", "category": "Other", "priority": "Critical", "where": "Property manager", "why": "Rental income & expenses source"},
+          {"item": "Loan interest statement (rental)", "category": "Other", "priority": "Critical", "where": "Lender → Tax statements", "why": "Deductible interest"},
+          {"item": "Council rates notice (rental)", "category": "Other", "priority": "Important", "where": "Council portal", "why": "Deductible expense"},
+          {"item": "Water rates (rental)", "category": "Other", "priority": "Important", "where": "Water utility portal", "why": "Deductible expense"},
+          {"item": "Landlord insurance", "category": "Other", "priority": "Important", "where": "Insurer portal", "why": "Deductible expense"},
+          {"item": "Depreciation schedule (if held)", "category": "09 Accountant Review", "priority": "Later", "where": "Quantity surveyor report", "why": "Capital allowance deductions"}
+        ]
+      },
+      { "rule_key": "airbnb_evidence", "if": {"has_airbnb": true},
+        "items": [
+          {"item": "Airbnb annual earnings report", "category": "03 Airbnb", "priority": "Critical", "where": "Airbnb host dashboard → Earnings", "why": "Required to declare short-stay rental income"},
+          {"item": "Airbnb cleaning receipts", "category": "03 Airbnb", "priority": "Important", "where": "Email receipts / bank statements", "why": "Deductible expense"},
+          {"item": "Airbnb supplies / linen / consumables", "category": "03 Airbnb", "priority": "Later", "where": "Store receipts", "why": "Deductible expense"},
+          {"item": "Number of weeks/nights rented (write down)", "category": "09 Accountant Review", "priority": "Critical", "where": "Airbnb calendar", "why": "Required for private-use apportionment"}
+        ]
+      },
+      { "rule_key": "business_income_evidence", "if": {"has_business_income": true},
+        "items": [
+          {"item": "Sole trader income & expense summary", "category": "09 Accountant Review", "priority": "Critical", "where": "Bookkeeping software / spreadsheet", "why": "Required for Business Schedule"}
+        ]
+      },
+      { "rule_key": "company_director_evidence", "if": {"has_company_income": true},
+        "items": [
+          {"item": "Director loan account ledger", "category": "09 Accountant Review", "priority": "Critical", "where": "Company accounts", "why": "Division 7A risk review"},
+          {"item": "Dividend statements from company", "category": "Other", "priority": "Important", "where": "Company records", "why": "Required to declare dividend income"}
+        ]
+      },
+      { "rule_key": "crypto_evidence", "if": {"has_crypto": true},
+        "items": [
+          {"item": "Crypto exchange annual tax report / CSV", "category": "09 Accountant Review", "priority": "Critical", "where": "Exchange tax tool", "why": "CGT calculation required"}
+        ]
+      },
+      { "rule_key": "capital_gains_evidence", "if": {"has_capital_gains": true},
+        "items": [
+          {"item": "Buy/sell contract notes for disposed assets", "category": "09 Accountant Review", "priority": "Critical", "where": "Broker / settlement documents", "why": "CGT cost base & proceeds"}
+        ]
+      },
+      { "rule_key": "compensation_inheritance_evidence", "if": {"has_compensation_or_inheritance": true},
+        "items": [
+          {"item": "Settlement deed / insurer letter / estate statement", "category": "09 Accountant Review", "priority": "Critical", "where": "Lawyer / insurer / estate", "why": "Accountant must classify (never auto-assume)"}
+        ]
+      },
+      { "rule_key": "car_logbook_evidence", "if": {"claim_car": true, "car_has_logbook": true},
+        "items": [
+          {"item": "Logbook for the year", "category": "Other", "priority": "Critical", "where": "Logbook app / book", "why": "Required for logbook method"},
+          {"item": "Fuel, rego, insurance, repairs, servicing receipts", "category": "Other", "priority": "Important", "where": "Receipts / bank statements", "why": "Logbook method expenses"}
+        ]
+      },
+      { "rule_key": "car_cents_per_km_evidence", "if": {"claim_car": true, "car_has_logbook": false},
+        "items": [
+          {"item": "Work-km basis (rosters / calendar / job records)", "category": "Other", "priority": "Important", "where": "Personal records", "why": "Cents-per-km method requires basis for kilometres"}
+        ]
+      },
+      { "rule_key": "phone_internet_evidence", "if": {"claim_phone_internet": true},
+        "items": [
+          {"item": "Phone bills (full year)", "category": "Other", "priority": "Important", "where": "Telco portal", "why": "Required to claim work-use portion"},
+          {"item": "Internet bills (full year)", "category": "Other", "priority": "Important", "where": "ISP portal", "why": "Required to claim work-use portion"}
+        ]
+      },
+      { "rule_key": "wfh_fixed_rate_evidence", "if": {"claim_wfh": true, "wfh_method": "fixed_rate"},
+        "items": [
+          {"item": "Record of hours worked from home", "category": "Other", "priority": "Important", "where": "Diary / timesheet / calendar", "why": "Required for fixed-rate method"}
+        ]
+      },
+      { "rule_key": "wfh_actual_cost_evidence", "if": {"claim_wfh": true, "wfh_method": "actual_cost"},
+        "items": [
+          {"item": "Electricity / gas bills (home office portion)", "category": "Other", "priority": "Important", "where": "Provider portal", "why": "Required for actual-cost method"},
+          {"item": "Internet / phone bills (work-use portion)", "category": "Other", "priority": "Important", "where": "Provider portal", "why": "Required for actual-cost method"}
+        ]
+      },
+      { "rule_key": "uniform_evidence", "if": {"claim_uniform": true},
+        "items": [
+          {"item": "Uniform / protective clothing receipts", "category": "Other", "priority": "Later", "where": "Store receipts", "why": "Required to claim clothing deduction"}
+        ]
+      },
+      { "rule_key": "professional_registration_evidence", "if": {"claim_professional_registration": true},
+        "items": [
+          {"item": "AHPRA / professional registration receipt", "category": "Other", "priority": "Important", "where": "AHPRA portal / receipt email", "why": "Deductible work expense"},
+          {"item": "Union / professional association invoice", "category": "Other", "priority": "Later", "where": "Email receipt", "why": "Deductible work expense"}
+        ]
+      },
+      { "rule_key": "self_education_evidence", "if": {"claim_self_education": true},
+        "items": [
+          {"item": "Self-education course invoice & certificate", "category": "Other", "priority": "Important", "where": "Course provider", "why": "Required to claim self-education"}
+        ]
+      },
+      { "rule_key": "tools_equipment_evidence", "if": {"claim_tools_equipment": true},
+        "items": [
+          {"item": "Tools / equipment / device receipts", "category": "Other", "priority": "Important", "where": "Store receipts", "why": "Deduction or depreciation depending on cost"}
+        ]
+      },
+      { "rule_key": "donations_evidence", "if": {"claim_donations": true},
+        "items": [
+          {"item": "Donation receipts from DGR charities", "category": "Other", "priority": "Later", "where": "Charity receipt emails", "why": "Required for donation deduction"}
+        ]
+      },
+      { "rule_key": "income_protection_evidence", "if": {"claim_income_protection": true},
+        "items": [
+          {"item": "Income protection insurance premium statement", "category": "09 Accountant Review", "priority": "Important", "where": "Insurer", "why": "Premium may be deductible — accountant review"}
+        ]
+      },
+      { "rule_key": "tax_agent_fees_evidence", "if": {"claim_tax_agent_fees": true},
+        "items": [
+          {"item": "Tax agent / accountant invoice", "category": "Other", "priority": "Later", "where": "Agent invoice", "why": "Deductible — managing tax affairs"}
+        ]
+      },
+      { "rule_key": "personal_super_evidence", "if": {"claim_personal_super": true},
+        "items": [
+          {"item": "Personal super contribution statement", "category": "09 Accountant Review", "priority": "Critical", "where": "Super fund", "why": "Required for personal deductible contribution"},
+          {"item": "Notice of Intent & fund acknowledgement", "category": "09 Accountant Review", "priority": "Critical", "where": "Super fund portal", "why": "Required to claim personal super deduction"}
+        ]
+      },
+      { "rule_key": "private_health_evidence", "if": {"has_private_health": true},
+        "items": [
+          {"item": "Private health insurance annual tax statement", "category": "Other", "priority": "Important", "where": "Insurer portal", "why": "Required for rebate & MLS calculation"}
+        ]
+      },
+      { "rule_key": "spouse_info", "if": {"has_spouse": true},
+        "items": [
+          {"item": "Spouse taxable income estimate & relationship dates", "category": "09 Accountant Review", "priority": "Important", "where": "Write down", "why": "Required for MLS / offsets"}
+        ]
+      }
+    ]
+  },
+  "company": {
+    "rules": [
+      { "rule_key": "company_financials", "if": {"trading_status": "trading"},
+        "items": [
+          {"item": "Profit & Loss statement", "category": "06 Revive", "priority": "Critical", "where": "Bookkeeping software", "why": "Core financial statement"},
+          {"item": "Balance Sheet", "category": "06 Revive", "priority": "Critical", "where": "Bookkeeping software", "why": "Core financial statement"},
+          {"item": "General ledger", "category": "06 Revive", "priority": "Critical", "where": "Bookkeeping software", "why": "Audit trail"},
+          {"item": "Trial balance", "category": "06 Revive", "priority": "Important", "where": "Bookkeeping software", "why": "Reconciliation check"},
+          {"item": "Business bank statements", "category": "07 Bank Statements", "priority": "Critical", "where": "Business banking portal", "why": "Required for reconciliation"}
+        ]
+      },
+      { "rule_key": "company_gst", "if": {"gst_registered": true},
+        "items": [
+          {"item": "All BAS lodgements for the year", "category": "01 ATO", "priority": "Critical", "where": "ATO portal", "why": "GST reconciliation"},
+          {"item": "GST reports from accounting software", "category": "06 Revive", "priority": "Important", "where": "Bookkeeping software", "why": "GST reconciliation"}
+        ]
+      },
+      { "rule_key": "company_payroll", "if": {"has_employees": true},
+        "items": [
+          {"item": "STP finalisation report", "category": "06 Revive", "priority": "Critical", "where": "Payroll software", "why": "Required for wages claim & super"},
+          {"item": "Super clearing house receipts (quarterly)", "category": "06 Revive", "priority": "Critical", "where": "Clearing house portal", "why": "Required to claim super (late super not deductible)"},
+          {"item": "PAYG withholding annual report", "category": "01 ATO", "priority": "Important", "where": "Payroll software / ATO", "why": "Withholding reconciliation"}
+        ]
+      },
+      { "rule_key": "company_assets", "if": {"owns_assets": true},
+        "items": [
+          {"item": "Asset register", "category": "06 Revive", "priority": "Critical", "where": "Bookkeeping software", "why": "Depreciation schedule input"},
+          {"item": "Depreciation schedule", "category": "09 Accountant Review", "priority": "Critical", "where": "Accountant", "why": "Required for capital allowance claim"}
+        ]
+      },
+      { "rule_key": "company_director_loans", "if": {"director_loans": true},
+        "items": [
+          {"item": "Director loan account ledger", "category": "09 Accountant Review", "priority": "Critical", "where": "Bookkeeping software", "why": "Division 7A review required"}
+        ]
+      },
+      { "rule_key": "company_private_use", "if": {"private_expenses": true},
+        "items": [
+          {"item": "List of private expenses paid by company", "category": "09 Accountant Review", "priority": "Critical", "where": "Write down with amounts", "why": "FBT / Division 7A / private-benefit review required"}
+        ]
+      }
+    ]
+  }
+}

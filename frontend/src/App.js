@@ -15,6 +15,7 @@ import BankTransactions from "@/pages/BankTransactions";
 import RubbishBin from "@/pages/RubbishBin";
 import Properties from "@/pages/Properties";
 import ManualEntry from "@/pages/ManualEntry";
+import CreateTaxReturn from "@/pages/CreateTaxReturn";
 
 function App() {
   return (
@@ -36,6 +37,8 @@ function App() {
               <Route path="/rubbish-bin" element={<RubbishBin />} />
               <Route path="/properties" element={<Properties />} />
               <Route path="/manual-entry" element={<ManualEntry />} />
+              {/* Phase 3 — Tax Return creation wizard */}
+              <Route path="/tax-returns/new" element={<CreateTaxReturn />} />
             </Route>
           </Routes>
         </ErrorBoundary>
