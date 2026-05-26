@@ -90,6 +90,16 @@ CATEGORY_TO_FOLDER = {
 
 CATEGORIES = list(CATEGORY_TO_FOLDER.keys())
 TAX_YEARS = ["FY2024", "FY2025", "Both", "Unsure"]
+
+# Dynamic tax-year config seed. The canonical source of truth is the
+# `tax_years` collection (seeded on startup if empty). The hardcoded
+# TAX_YEARS list above is only a legacy fallback for callers that haven't
+# been migrated yet.
+DEFAULT_TAX_YEAR_SEED = [
+    {"id": "fy2024", "name": "FY2024", "start_date": "2023-07-01", "end_date": "2024-06-30", "active": True,  "locked": False, "order": 1},
+    {"id": "fy2025", "name": "FY2025", "start_date": "2024-07-01", "end_date": "2025-06-30", "active": True,  "locked": False, "order": 2},
+    {"id": "fy2026", "name": "FY2026", "start_date": "2025-07-01", "end_date": "2026-06-30", "active": True,  "locked": False, "order": 3},
+]
 STATUS_OPTIONS = [
     "Uploaded only",
     "Needs analysis",
@@ -164,6 +174,18 @@ DASHBOARD_CARDS = [
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+async def get_active_tax_years() -> list[str]:
+    """Return the names of currently-active FYs ordered by `order`. Used by
+    everything that previously hardcoded ('FY2024', 'FY2025'). Falls back to
+    a safe default if the collection isn't seeded yet."""
+    rows = await db.tax_years.find(
+        {"active": True}, {"_id": 0, "name": 1, "order": 1}
+    ).sort("order", 1).to_list(50)
+    if not rows:
+        return ["FY2024", "FY2025"]
+    return [r["name"] for r in rows]
 
 
 class Document(BaseModel):
@@ -1376,9 +1398,12 @@ async def dashboard_readiness():
 
 @api_router.get("/reference")
 async def reference():
+    active_years = await get_active_tax_years()
+    dropdown_years = active_years + ["Both", "Unsure"]
     return {
         "categories": CATEGORIES,
-        "tax_years": TAX_YEARS,
+        "tax_years": dropdown_years,
+        "active_tax_years": active_years,
         "status_options": STATUS_OPTIONS,
         "priorities": PRIORITIES,
         "folder_structure": [f for f, _ in FOLDER_STRUCTURE],
@@ -1895,11 +1920,69 @@ VALID_TAX_SECTIONS = {
 
 @api_router.get("/tax-years")
 async def list_tax_year_summaries():
-    """Summary across the FY2024 + FY2025 returns."""
+    """Summary across all ACTIVE configured tax years."""
+    active = await get_active_tax_years()
     out = []
-    for y in ("FY2024", "FY2025"):
+    for y in active:
         out.append(await get_tax_year_summary(db, y))
     return out
+
+
+@api_router.get("/tax-years/config")
+async def list_tax_year_config():
+    """All configured tax years (active + inactive + locked)."""
+    return await db.tax_years.find({}, {"_id": 0}).sort("order", 1).to_list(100)
+
+
+@api_router.post("/tax-years/config")
+async def create_tax_year(payload: dict):
+    """Add a new tax year. Required: name, start_date, end_date."""
+    for f in ("name", "start_date", "end_date"):
+        if not payload.get(f):
+            raise HTTPException(400, f"missing required field: {f}")
+    if await db.tax_years.find_one({"name": payload["name"]}):
+        raise HTTPException(409, f"tax year '{payload['name']}' already exists")
+    max_order = await db.tax_years.find_one({}, sort=[("order", -1)])
+    next_order = (max_order or {}).get("order", 0) + 1
+    now = utc_now_iso()
+    row = {
+        "id": payload.get("id") or payload["name"].lower().replace(" ", "-"),
+        "name": payload["name"],
+        "start_date": payload["start_date"],
+        "end_date": payload["end_date"],
+        "active": bool(payload.get("active", True)),
+        "locked": bool(payload.get("locked", False)),
+        "order": int(payload.get("order", next_order)),
+        "notes": payload.get("notes", ""),
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.tax_years.insert_one(row)
+    return {"success": True, "tax_year": row}
+
+
+@api_router.patch("/tax-years/config/{ty_id}")
+async def update_tax_year(ty_id: str, payload: dict):
+    update = {k: v for k, v in payload.items() if k in {"active", "locked", "notes", "start_date", "end_date", "order"}}
+    if not update:
+        raise HTTPException(400, "no editable fields supplied")
+    update["updated_at"] = utc_now_iso()
+    res = await db.tax_years.update_one({"id": ty_id}, {"$set": update})
+    if res.matched_count == 0:
+        raise HTTPException(404, "tax year not found")
+    return await db.tax_years.find_one({"id": ty_id}, {"_id": 0})
+
+
+@api_router.delete("/tax-years/config/{ty_id}")
+async def delete_tax_year(ty_id: str):
+    ty = await db.tax_years.find_one({"id": ty_id}, {"_id": 0})
+    if not ty:
+        raise HTTPException(404, "tax year not found")
+    in_use = await db.documents.count_documents({"tax_year": ty["name"], "is_deleted": {"$ne": True}})
+    if in_use > 0:
+        raise HTTPException(409, f"cannot delete: {in_use} document(s) reference {ty['name']}. Set active=false instead.")
+    await db.tax_years.delete_one({"id": ty_id})
+    return {"success": True}
 
 
 @api_router.get("/tax-years/{tax_year}")
@@ -2203,14 +2286,13 @@ async def list_properties_endpoint():
 async def create_property_endpoint(payload: dict):
     name = (payload or {}).get("property_name")
     address = (payload or {}).get("address", "")
+    entity_type = (payload or {}).get("entity_type", "property")
     if not name:
         raise HTTPException(400, "property_name is required")
-    # Reject duplicates (the unique index would 11000 — translate that
-    # into a clean 409 for the UI).
     exists = await db.properties.find_one({"property_name": name}, {"_id": 0})
     if exists:
-        raise HTTPException(409, f"property '{name}' already exists")
-    new_id = await _prop.add_property(db, property_name=name, address=address)
+        raise HTTPException(409, f"asset/entity '{name}' already exists")
+    new_id = await _prop.add_property(db, property_name=name, address=address, entity_type=entity_type)
     return {"success": True, "property_id": new_id}
 
 
@@ -2376,6 +2458,7 @@ async def reset_test_data(payload: dict | None = None):
             "missing_items_reset": me_res.modified_count,
             "upload_queue_cleared": queue_res.deleted_count,
             "properties_reseeded": props_deleted if reset_properties else 0,
+            "force_client_reload": True,
             "message": "Reset complete. Documents moved to Rubbish Bin (restorable). Drive copies trashed when possible.",
         }
     except Exception as e:
@@ -2479,20 +2562,19 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    # Stage 1 PAYG preload remains (FY income figures).
-    if await db.figures.count_documents({"figure_type": "payg_income"}) == 0:
-        await db.figures.insert_many([
-            Figure(
-                figure_type="payg_income",
-                amount=i["amount"],
-                description=i["employer"],
-                source_document=f"Preloaded PAYG ({i['employer']})",
-                tax_year=i["tax_year"],
-                category="PAYG Income",
-            ).model_dump()
-            for i in PAYG_PRELOAD
-        ])
+    # PAYG preload is now OPT-IN via POST /api/seed/payg-income.
+    # We do NOT auto-seed on startup any more because that re-populated the
+    # dashboard after every Reset Test Data, defeating the reset.
     # Stage 2 missing-evidence seed runs in its own startup handler below.
+
+    # Seed the dynamic tax_years collection if empty so /api/tax-years/config,
+    # /reference, and the bank-statement out-of-range filter have a source of truth.
+    if await db.tax_years.count_documents({}) == 0:
+        now = utc_now_iso()
+        await db.tax_years.insert_many([
+            {**ty, "created_at": now, "updated_at": now}
+            for ty in DEFAULT_TAX_YEAR_SEED
+        ])
 
 
 @app.on_event("shutdown")

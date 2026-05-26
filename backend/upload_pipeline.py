@@ -703,17 +703,35 @@ async def _process_one(item: dict):
                 property_periods=property_periods,
             )
             now_iso = utc_now_iso()
-            # Out-of-range filter (Fix 4): drop transactions whose date falls
-            # outside the in-scope FY2024 / FY2025 window. If a statement has
-            # zero in-scope rows, soft-delete the document and trash its
-            # Drive copy so the workflow isn't cluttered.
-            WORKING_FYS = {"FY2024", "FY2025"}
+            # Out-of-range filter: drop transactions outside currently-active
+            # tax years (configured via /api/tax-years/config). If a statement
+            # has zero in-scope rows, soft-delete the source doc + trash Drive.
+            active_rows = await _db.tax_years.find(
+                {"active": True}, {"_id": 0, "name": 1, "start_date": 1, "end_date": 1}
+            ).to_list(50)
+            if not active_rows:
+                # Safety fallback if collection wasn't seeded — keep everything.
+                active_rows = [
+                    {"name": "FY2024", "start_date": "2023-07-01", "end_date": "2024-06-30"},
+                    {"name": "FY2025", "start_date": "2024-07-01", "end_date": "2025-06-30"},
+                ]
+            WORKING_FYS = {r["name"] for r in active_rows}
 
             def _fy_of(iso_date: str) -> str:
+                if not iso_date:
+                    return "Unsure"
                 try:
                     d = datetime.fromisoformat(iso_date)
                 except (ValueError, TypeError):
                     return "Unsure"
+                for r in active_rows:
+                    try:
+                        s = datetime.fromisoformat(r["start_date"])
+                        e = datetime.fromisoformat(r["end_date"])
+                        if s <= d <= e:
+                            return r["name"]
+                    except (KeyError, ValueError):
+                        continue
                 return f"FY{d.year + 1}" if d.month >= 7 else f"FY{d.year}"
 
             in_range = [t for t in transactions if _fy_of(t.get("transaction_date", "")) in WORKING_FYS]
@@ -729,7 +747,7 @@ async def _process_one(item: dict):
                     {"$set": {
                         "is_deleted": True,
                         "deleted_at": now_iso,
-                        "deleted_reason": "Bank statement entirely outside FY2024/FY2025",
+                        "deleted_reason": f"Bank statement entirely outside active tax years ({', '.join(sorted(WORKING_FYS))})",
                         "deleted_by_user": "auto_out_of_range",
                         "is_bank_statement": True,
                         "transactions_extracted_count": 0,
@@ -780,6 +798,51 @@ async def _process_one(item: dict):
         pass
     except Exception as e:
         logger.warning(f"Bank-statement extraction failed for {doc_id} (continuing): {e}")
+
+    # ---- Stage 7 propagation: PAYG / Income figures → /figures collection ----
+    # When a non-bank doc is classified as PAYG / income / payment summary, mirror
+    # the headline figures the AI already extracted into the `figures` collection
+    # so the Dashboard PAYG widget updates live. Bank statements have their own
+    # pipeline above. Cheap, no extra AI calls — pure data shuffle.
+    try:
+        is_payg_doc = (
+            cat in ("02 PAYG Income",)
+            or "payg" in (filename or "").lower()
+            or "payment summary" in ((text or "").lower()[:5000])
+        )
+        is_bank_doc = is_bank_statement(filename, text or "", cat)
+        if is_payg_doc and not is_bank_doc:
+            figures = analysis.get("headline_figures") or []
+            stored = 0
+            for fig in figures:
+                amt = fig.get("amount") or 0
+                label = (fig.get("label") or "").lower()
+                if amt <= 0:
+                    continue
+                if not any(k in label for k in ("gross", "income", "wage", "salary", "payg", "payment")):
+                    continue
+                fig_row = {
+                    "id": str(uuid.uuid4()),
+                    "figure_type": "payg_income",
+                    "amount": float(amt),
+                    "description": fig.get("label") or "PAYG income",
+                    "source_document": filename,
+                    "document_id": doc_id,
+                    "tax_year": analysis.get("tax_year") or "Unsure",
+                    "category": "PAYG Income",
+                    "created_at": utc_now_iso(),
+                }
+                exists = await _db.figures.find_one(
+                    {"document_id": doc_id, "description": fig_row["description"]},
+                    {"_id": 0, "id": 1},
+                )
+                if not exists:
+                    await _db.figures.insert_one(fig_row)
+                    stored += 1
+            if stored:
+                logger.info(f"PAYG propagation: stored {stored} figure(s) from {filename}")
+    except Exception as e:
+        logger.warning(f"PAYG propagation failed for {filename}: {e}")
 
     # ---- Stage 2: update missing-evidence tracker (non-blocking) ----
     # Skip auto-matching if we never had usable text to begin with — avoids

@@ -332,9 +332,17 @@ def test_readiness_blocks_when_inbox_has_docs(s):
 # ============================================================================
 
 def test_reference_tax_years_locked(s):
+    # Stage 7 final fix: tax years are now dynamic — seeded with FY2024/25/26
+    # and editable via /api/tax-years/config. The contract is still: FY2024
+    # and FY2025 must always be present; "Both"/"Unsure" sentinels included.
     r = s.get(f"{API}/reference")
     assert r.status_code == 200
-    tys = r.json().get("tax_years", [])
+    body = r.json()
+    tys = body.get("tax_years", [])
     assert "FY2024" in tys
     assert "FY2025" in tys
-    assert "FY2026" not in tys, "FY2026 must not be exposed yet"
+    assert "Both" in tys and "Unsure" in tys
+    # active_tax_years is the new key consumed by dropdowns
+    assert "active_tax_years" in body
+    assert "FY2024" in body["active_tax_years"]
+    assert "FY2025" in body["active_tax_years"]

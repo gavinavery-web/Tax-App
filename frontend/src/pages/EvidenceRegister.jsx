@@ -114,12 +114,34 @@ function Dropzone({ onFiles }) {
 
 function EditRow({ docId, open, onClose, reference, onSaved }) {
   const [doc, setDoc] = useState(null);
+  const [saving, setSaving] = useState(false);
   useEffect(() => { if (open && docId) api.get(`/documents/${docId}`).then((r) => setDoc(r.data)); }, [open, docId]);
   if (!open) return null;
-  const update = (patch) => api.patch(`/documents/${docId}`, patch).then((r) => { setDoc(r.data); onSaved?.(); });
+  const update = async (patch) => {
+    setSaving(true);
+    try {
+      const r = await api.patch(`/documents/${docId}`, patch);
+      setDoc(r.data);
+      onSaved?.();
+      // Visible save confirmation (Fix 3) — especially for Accountant Review.
+      if (patch.accountant_review === "No") {
+        toast.success("Accountant review cleared. Status updated.");
+      } else if (patch.accountant_review === "Yes") {
+        toast.success("Flagged for accountant review.");
+      } else if (Object.keys(patch).length > 0) {
+        toast.success("Saved");
+      }
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
   const updateFigure = (idx, patch) => {
     const figs = (doc.headline_figures_json || []).map((f, i) => i === idx ? { ...f, ...patch } : f);
-    update({}).then(() => api.patch(`/documents/${docId}/figures`, { figures: figs }).then((r) => { setDoc(r.data); onSaved?.(); }));
+    api.patch(`/documents/${docId}/figures`, { figures: figs })
+      .then((r) => { setDoc(r.data); onSaved?.(); toast.success("Figure saved"); })
+      .catch((e) => toast.error(e?.response?.data?.detail || "Figure save failed"));
   };
   const ref = reference || {};
   return (
@@ -170,9 +192,24 @@ function EditRow({ docId, open, onClose, reference, onSaved }) {
               <div className="bg-zinc-50 border border-zinc-200 rounded-sm p-2">
                 <div className="text-[11px] uppercase tracking-wider text-zinc-500">AI cost · model</div>
                 <div className="mt-1 mono text-xs">${(doc.ai_cost_usd || 0).toFixed(4)}{doc.ai_response_cached && " (cached)"}</div>
-                <div className="text-[11px] text-zinc-500 mono">{doc.ai_model_used || "—"}</div>
-              </div>
+                <div className="text-[11px] text-zinc-500 mono">{doc.ai_model_used || "—"}</div>              </div>
             </div>
+            {/* Fix 6: AI decision summary — re-uses the existing one_line_summary
+                + accountant_review_reason fields. No new AI calls needed. */}
+            {(doc.one_line_summary || doc.accountant_review_reason || doc.is_bank_statement) && (
+              <div className="bg-blue-50 border border-blue-200 rounded-sm p-3 text-xs" data-testid="ai-decision-summary">
+                <div className="text-[11px] uppercase tracking-wider text-blue-900 font-semibold mb-1">AI decision summary</div>
+                {doc.one_line_summary && <div className="text-blue-900">{doc.one_line_summary}</div>}
+                {doc.accountant_review_reason && (
+                  <div className="text-blue-800 mt-1"><span className="font-semibold">Reason for review:</span> {doc.accountant_review_reason}</div>
+                )}
+                {doc.is_bank_statement && (
+                  <div className="text-blue-800 mt-1"><span className="font-semibold">Bank statement:</span> {doc.transactions_extracted_count || 0} transaction(s) extracted
+                  {doc.transactions_out_of_range > 0 && ` (${doc.transactions_out_of_range} outside active years)`}
+                  </div>
+                )}
+              </div>
+            )}
             {doc.accountant_review_required && doc.accountant_review_reason && (
               <div className="bg-amber-50 border border-amber-200 rounded-sm p-2 text-xs text-amber-900">
                 <span className="font-semibold">Accountant review: </span>{doc.accountant_review_reason}
