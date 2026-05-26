@@ -214,6 +214,13 @@ class Document(BaseModel):
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
 
+    # === Phase 1 additive fields (DO NOT REMOVE EXISTING FIELDS) ===
+    tax_return_id: Optional[str] = None
+    questions: List[dict] = Field(default_factory=list)      # populated in Phase 4
+    classification_method: Optional[str] = None              # "code" | "ai" | "manual" | "paid_ai" — populated in Phase 2
+    detected_date: Optional[str] = None                      # populated in Phase 2
+    date_confidence: Optional[str] = None                    # populated in Phase 2
+
 
 class DocumentUpdate(BaseModel):
     name: Optional[str] = None
@@ -227,6 +234,7 @@ class DocumentUpdate(BaseModel):
     missing_followup: Optional[str] = None
     manual_drive_folder: Optional[str] = None
     manual_drive_link: Optional[str] = None
+    tax_return_id: Optional[str] = None
 
 
 class Figure(BaseModel):
@@ -265,6 +273,11 @@ class MissingItem(BaseModel):
     notes: Optional[str] = ""
     created_at: str = Field(default_factory=utc_now_iso)
 
+    # === Phase 1 additive fields ===
+    tax_return_id: Optional[str] = None
+    generated_by: Optional[str] = "seed"                     # "seed" | "profile" | "user"
+    profile_rule_key: Optional[str] = None                   # populated in Phase 3
+
 
 class MissingItemCreate(BaseModel):
     item_needed: str
@@ -286,6 +299,8 @@ class MissingItemUpdate(BaseModel):
     why_matters: Optional[str] = None
     status: Optional[str] = None
     notes: Optional[str] = None
+    tax_return_id: Optional[str] = None
+    generated_by: Optional[str] = None
 
 
 # =================== Stage 7 models (Tax Return Intelligence) ===================
@@ -411,6 +426,39 @@ class Property(BaseModel):
     use_periods: List[PropertyUsePeriod] = []
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
+
+
+# =================== Phase 1 — Tax Returns as Containers ===================
+
+class TaxReturn(BaseModel):
+    """A tax return is the working container for one year × one entity type."""
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = Field(default_factory=lambda: f"tr-{uuid.uuid4().hex[:12]}")
+    tax_year: str                                # e.g. "FY2025" — must match a tax_years.name
+    return_type: str                             # "personal" | "company" | "trust" | "sole_trader"
+    entity_name: str                             # display label, e.g. "Gavin Christie" or "Revive Drip Hydration Pty Ltd"
+    status: str = "collecting_evidence"          # collecting_evidence | ready_for_review | ready_for_accountant | lodged | archived
+    profile_answers: dict = Field(default_factory=dict)  # populated in Phase 3, empty for now
+    notes: Optional[str] = ""
+    is_deleted: bool = False
+    deleted_at: Optional[str] = None
+    created_at: str = Field(default_factory=utc_now_iso)
+    updated_at: str = Field(default_factory=utc_now_iso)
+
+
+class TaxReturnCreate(BaseModel):
+    tax_year: str
+    return_type: str
+    entity_name: str
+    notes: Optional[str] = ""
+
+
+class TaxReturnUpdate(BaseModel):
+    entity_name: Optional[str] = None
+    status: Optional[str] = None
+    profile_answers: Optional[dict] = None
+    notes: Optional[str] = None
 
 
 # =================== Drive helpers ===================
@@ -1998,6 +2046,133 @@ async def get_tax_year_breakdown(tax_year: str):
     return await get_tax_year_summary(db, tax_year)
 
 
+# =================== Tax Returns (Phase 1) ===================
+
+VALID_RETURN_TYPES = {"personal", "company", "trust", "sole_trader"}
+VALID_RETURN_STATUSES = {"collecting_evidence", "ready_for_review", "ready_for_accountant", "lodged", "archived"}
+
+
+async def _tax_year_exists(name: str) -> bool:
+    row = await db.tax_years.find_one({"name": name}, {"_id": 0, "name": 1})
+    return row is not None
+
+
+@api_router.post("/tax-returns", response_model=TaxReturn)
+async def create_tax_return(payload: TaxReturnCreate):
+    if payload.return_type not in VALID_RETURN_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid return_type. Must be one of {sorted(VALID_RETURN_TYPES)}")
+    if not await _tax_year_exists(payload.tax_year):
+        raise HTTPException(status_code=400, detail=f"Tax year '{payload.tax_year}' does not exist")
+    if not payload.entity_name.strip():
+        raise HTTPException(status_code=400, detail="entity_name cannot be empty")
+
+    tr = TaxReturn(**payload.model_dump())
+    await db.tax_returns.insert_one(tr.model_dump())
+    return tr
+
+
+@api_router.get("/tax-returns", response_model=List[TaxReturn])
+async def list_tax_returns(
+    tax_year: Optional[str] = None,
+    return_type: Optional[str] = None,
+    status: Optional[str] = None,
+    include_deleted: bool = False,
+):
+    q: dict = {}
+    if not include_deleted:
+        q["is_deleted"] = {"$ne": True}
+    if tax_year:
+        q["tax_year"] = tax_year
+    if return_type:
+        q["return_type"] = return_type
+    if status:
+        q["status"] = status
+    rows = await db.tax_returns.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return [TaxReturn(**r) for r in rows]
+
+
+@api_router.get("/tax-returns/{return_id}", response_model=TaxReturn)
+async def get_tax_return(return_id: str):
+    row = await db.tax_returns.find_one({"id": return_id, "is_deleted": {"$ne": True}}, {"_id": 0})
+    if not row:
+        raise HTTPException(status_code=404, detail="Tax return not found")
+    return TaxReturn(**row)
+
+
+@api_router.patch("/tax-returns/{return_id}", response_model=TaxReturn)
+async def update_tax_return(return_id: str, payload: TaxReturnUpdate):
+    row = await db.tax_returns.find_one({"id": return_id, "is_deleted": {"$ne": True}}, {"_id": 0})
+    if not row:
+        raise HTTPException(status_code=404, detail="Tax return not found")
+
+    updates = payload.model_dump(exclude_unset=True)
+    if "status" in updates and updates["status"] not in VALID_RETURN_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of {sorted(VALID_RETURN_STATUSES)}")
+    if "entity_name" in updates and not updates["entity_name"].strip():
+        raise HTTPException(status_code=400, detail="entity_name cannot be empty")
+
+    updates["updated_at"] = utc_now_iso()
+    await db.tax_returns.update_one({"id": return_id}, {"$set": updates})
+    row = await db.tax_returns.find_one({"id": return_id}, {"_id": 0})
+    return TaxReturn(**row)
+
+
+@api_router.delete("/tax-returns/{return_id}")
+async def delete_tax_return(return_id: str):
+    """Soft delete only. Sets is_deleted=true. Documents and missing items keep their tax_return_id."""
+    row = await db.tax_returns.find_one({"id": return_id}, {"_id": 0, "id": 1})
+    if not row:
+        raise HTTPException(status_code=404, detail="Tax return not found")
+    await db.tax_returns.update_one(
+        {"id": return_id},
+        {"$set": {"is_deleted": True, "deleted_at": utc_now_iso(), "status": "archived"}},
+    )
+    return {"ok": True, "id": return_id, "soft_deleted": True}
+
+
+@api_router.get("/tax-returns/{return_id}/summary")
+async def tax_return_summary(return_id: str):
+    """Counts of documents and missing items linked to this return. Used by the workspace page in Phase 4."""
+    tr = await db.tax_returns.find_one({"id": return_id, "is_deleted": {"$ne": True}}, {"_id": 0})
+    if not tr:
+        raise HTTPException(status_code=404, detail="Tax return not found")
+
+    doc_count = await db.documents.count_documents({"tax_return_id": return_id})
+    inbox_count = await db.documents.count_documents({"tax_return_id": return_id, "category": "Other", "status": "Accountant review"})
+    missing_total = await db.missing_items.count_documents({"tax_return_id": return_id})
+    missing_open = await db.missing_items.count_documents({
+        "tax_return_id": return_id,
+        "status": {"$in": ["Outstanding", "Possible Match", "Accountant Review"]}
+    })
+
+    return {
+        "tax_return": tr,
+        "documents_count": doc_count,
+        "inbox_count": inbox_count,
+        "missing_evidence_total": missing_total,
+        "missing_evidence_open": missing_open,
+    }
+
+
+@api_router.post("/tax-returns/{return_id}/assign-documents")
+async def assign_documents_to_return(return_id: str, document_ids: List[str]):
+    """Manually assign existing documents to this return. Used for migrating legacy docs.
+    Does NOT move files on Drive. Does NOT change category. Only sets tax_return_id."""
+    tr = await db.tax_returns.find_one({"id": return_id, "is_deleted": {"$ne": True}}, {"_id": 0, "id": 1})
+    if not tr:
+        raise HTTPException(status_code=404, detail="Tax return not found")
+    if not document_ids:
+        raise HTTPException(status_code=400, detail="document_ids list cannot be empty")
+
+    result = await db.documents.update_many(
+        {"id": {"$in": document_ids}},
+        {"$set": {"tax_return_id": return_id, "updated_at": utc_now_iso()}},
+    )
+    return {"ok": True, "matched": result.matched_count, "modified": result.modified_count}
+
+
+
+
 @api_router.get("/tax-return-items")
 async def list_tax_return_items(
     tax_year: Optional[str] = None,
@@ -2608,6 +2783,12 @@ async def startup():
             {**ty, "created_at": now, "updated_at": now}
             for ty in DEFAULT_TAX_YEAR_SEED
         ])
+
+    # Phase 1 — tax_returns indexes (idempotent — Mongo creates the collection on first insert).
+    await db.tax_returns.create_index("id", unique=True)
+    await db.tax_returns.create_index([("tax_year", 1), ("return_type", 1), ("is_deleted", 1)])
+    await db.documents.create_index("tax_return_id")
+    await db.missing_items.create_index("tax_return_id")
 
 
 @app.on_event("shutdown")
